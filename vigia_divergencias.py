@@ -29,15 +29,15 @@ SEP = '━━━━━━━━━━━━━━━━━━'
 
 # simbolo Yahoo, nombre, tick, decimales, confirmaciones minimas, tipo de tamano, veredicto de la auditoria
 ACTIVOS = {
-    'QQQ':      dict(yahoo='QQQ', nombre='Nasdaq 100', tick=0.01, dec=2, minconf=3, tipo='accion', coste=0.03, apal=5,
+    'QQQ':      dict(yahoo='QQQ', nombre='Nasdaq 100', tick=0.01, dec=2, minconf=1, tipo='accion', coste=0.03, apal=5,
                      audit='🧪 EN OBSERVACIÓN · Nasdaq M5 3/3 en sesión EE. UU.: PF 1,33 / 1,52 (52 ops 2023-26). Prometedora, no validada.'),
-    'XAUUSD':   dict(yahoo='GC=F', nombre='Oro contado', tick=0.01, dec=2, minconf=3, tipo='oro', coste=0.40, apal=20,
+    'XAUUSD':   dict(yahoo='GC=F', nombre='Oro contado', tick=0.01, dec=2, minconf=1, tipo='oro', coste=0.40, apal=20,
                      audit='⚠️ NO RENTABLE en el backtest del oro (M5 3/3: PF 0,59 / 1,41). Solo para seguir en demo.'),
-    'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=2, tipo='fx', coste=0.00012, apal=30,
+    'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=1, tipo='fx', coste=0.00012, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,45-0,89). Solo para seguir en demo.'),
-    'GBPUSD':   dict(yahoo='GBPUSD=X', nombre='GBP/USD', tick=0.00001, dec=5, minconf=2, tipo='fx', coste=0.00015, apal=30,
+    'GBPUSD':   dict(yahoo='GBPUSD=X', nombre='GBP/USD', tick=0.00001, dec=5, minconf=1, tipo='fx', coste=0.00015, apal=30,
                      audit='⚠️ NO VALIDADA en el backtest (M5: PF 0,47-1,26). Solo para seguir en demo.'),
-    'USDJPY':   dict(yahoo='USDJPY=X', nombre='USD/JPY', tick=0.001, dec=3, minconf=2, tipo='fx', coste=0.015, apal=30,
+    'USDJPY':   dict(yahoo='USDJPY=X', nombre='USD/JPY', tick=0.001, dec=3, minconf=1, tipo='fx', coste=0.015, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,70-1,01). Solo para seguir en demo.'),
 }
 
@@ -147,6 +147,43 @@ def setups(d, a):
     return out
 
 
+def vigilancia(d, a):
+    """Avisos previos (sin orden todavia): divergencia formandose o precio cerca del extremo anterior con MACD debil."""
+    H, L, C, Mc, idx, n = d.High.values, d.Low.values, d.Close.values, d.macd.values, d.index, len(d)
+    tr = np.maximum(H[1:] - L[1:], np.maximum(abs(H[1:] - C[:-1]), abs(L[1:] - C[:-1])))
+    atr = tr[-14:].mean(); out = []
+    for lado in (-1, 1):
+        X = H if lado < 0 else L
+        piv = np.nonzero(pivotes(X, alto=lado < 0))[0]
+        if not len(piv):
+            continue
+        p = piv[-1]; nom = 'VENTA' if lado < 0 else 'COMPRA'; ext = 'máximo' if lado < 0 else 'mínimo'
+        mas_alla = (lambda x, y: x > y) if lado < 0 else (lambda x, y: x < y)
+        debil = (lambda m: m < Mc[p]) if lado < 0 else (lambda m: m > Mc[p])
+        forma = None
+        for k in range(n - 1, n - N - 1, -1):            # vela candidata a pivote, sin las N velas de la derecha
+            if MIN_SEP <= k - p <= MAX_SEP and X[k] == (X[k - N:].max() if lado < 0 else X[k - N:].min()) \
+                    and mas_alla(X[k], X[p]) and debil(Mc[k]):
+                forma = k; break
+        clave = f"{'V' if lado < 0 else 'C'}{idx[p]:%Y%m%d%H%M}"
+        if forma is not None:
+            k = forma; medio = L[p:k + 1].min() if lado < 0 else H[p:k + 1].max(); tramo = abs(X[k] - medio)
+            faltan = N - (n - 1 - k)
+            out.append((f'forma|{clave}', '\n'.join([
+                f"👀 <b>POSIBLE {nom} FORMÁNDOSE</b> · 5 min",
+                f"Nuevo {ext} <code>{fmt(a, X[k])}</code> más allá del anterior <code>{fmt(a, X[p])}</code>, con el MACD más débil (divergencia).",
+                f"Si en las próximas {faltan} velas (≈{5 * faltan} min) no supera <code>{fmt(a, X[k])}</code>, saldrá la orden:",
+                f"   entrada ≈ <code>{fmt(a, X[k] + lado * 0.236 * tramo)}</code> · SL ≈ <code>{fmt(a, X[k] - lado * a['tick'])}</code> · "
+                f"T2 ≈ <code>{fmt(a, X[k] + lado * 0.618 * tramo)}</code>",
+                "Estate atento; aún no hay orden."])))
+        elif MIN_SEP <= n - 1 - p <= MAX_SEP and 0 < (X[p] - C[-1]) * -lado <= 0.5 * atr and debil(Mc[-1]):
+            out.append((f'cerca|{clave}', '\n'.join([
+                f"👀 <b>CERCA DE UNA POSIBLE {nom}</b> · 5 min",
+                f"Precio <code>{fmt(a, C[-1])}</code> a {fmt(a, abs(X[p] - C[-1]))} del {ext} anterior <code>{fmt(a, X[p])}</code> y el MACD ya está más débil.",
+                f"Si hace un nuevo {ext} y gira, se formará la divergencia y te mando la orden."])))
+    return out
+
+
 # ---------------------------------------------------------------- mensajes
 def tamano(a, R, precio):
     """Unidades para arriesgar el 1 %, limitadas por el apalancamiento minorista (ESMA) de cada activo."""
@@ -175,7 +212,8 @@ def mensaje(sim, a, s, evento, t, precio):
     if evento == 'nueva':
         return '\n'.join([
             f"🆕 <b>{'🔴' if s['lado'] < 0 else '🟢'} {lado} PREPARADA · {sim}</b> ({a['nombre']}) · 5 min · {hora}",
-            f"Divergencia {'bajista' if s['lado'] < 0 else 'alcista'} MACD · confirmaciones {s['conf']}/{s['maxconf']}",
+            f"Divergencia {'bajista' if s['lado'] < 0 else 'alcista'} MACD · confirmaciones {s['conf']}/{s['maxconf']} "
+            + ('⭐ filtro completo' if s['conf'] == s['maxconf'] else '(filtro incompleto: menos fiable)'),
             SEP,
             f"👉 Orden {'sell stop' if s['lado'] < 0 else 'buy stop'} en <code>{fmt(a, s['ent'])}</code> (23,6 %)",
             f"⛔ SL: <code>{fmt(a, s['sl'])}</code> (riesgo {fmt(a, s['R'])})",
@@ -226,7 +264,13 @@ def main(prueba=False, informe=False):
                     d[['Open', 'High', 'Low', 'Close']] += base
                 except Exception:
                     errores.append('oro contado no disponible: niveles del futuro GC')
-            for s in setups(indicadores(d), a):
+            di = indicadores(d)
+            for clave, texto in vigilancia(di, a):
+                clave = f'{sim}|{clave}'
+                if clave not in enviados:
+                    salida.append((ahora, texto.replace('</b> · 5 min', f"</b> · {sim} ({a['nombre']}) · 5 min", 1) + '\n' + a['audit']))
+                    enviados.add(clave)
+            for s in setups(di, a):
                 for t, evento, precio in s['ev']:
                     clave = f"{sim}|{s['id']}|{evento}"
                     if t.date() == ahora.date():
@@ -273,7 +317,7 @@ def texto_informe(hoy, errores):
         lineas.append(f"• {sim} {'venta' if s['lado'] < 0 else 'compra'} {s['conf']}/{s['maxconf']}: {nom}")
     if finales:
         lineas.append(f"\nResultado de las cerradas hoy (objetivo T2): {total:+.1f}R")
-    lineas.append('\nRecuerda: solo QQQ (5 min, 3/3, sesión EE. UU.) pasó la auditoría, y con muestra pequeña.')
+    lineas.append('\nRecuerda: solo QQQ (5 min, 3/3, sesión EE. UU.) pasó la auditoría, y con muestra pequeña; las señales con menos confirmaciones son menos fiables.')
     if errores:
         lineas.append('⚠️ ' + '; '.join(errores))
     return '\n'.join(lineas)
