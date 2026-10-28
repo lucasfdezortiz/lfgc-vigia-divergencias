@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Vigia de divergencias MACD + Fibonacci (operativa atribuida a David Trullas) -> avisos por Telegram.
 
-Corre en la nube (GitHub Actions, cada 15 min) para avisar aunque el Mac este cerrado.
+Corre en la nube (GitHub Actions, revisando cada minuto) para avisar aunque el Mac este cerrado.
 Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fibo_Trullas.pine, en velas de 5 min:
   - Dos pivotes consecutivos (3 velas a cada lado): precio hace nuevo extremo y la linea MACD no.
   - Orden stop 1 tick tras el 23,6 % del tramo local; SL 1 tick tras el extremo; T1 38,2 %; T2 61,8 %.
@@ -11,7 +11,7 @@ Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ 
 Cada aviso lleva el resultado de la auditoria de ese activo (2023-2026, con costes).
 
 Datos: Yahoo Finance 5 min. Oro: futuro GC=F desplazado al precio contado de Swissquote (XAUUSD de MT5).
-Uso: python3 vigia_divergencias.py [--prueba] [--informe]   (--prueba: muestra los avisos sin enviar ni guardar)
+Uso: python3 vigia_divergencias.py [--prueba] [--informe] [--bucle MINUTOS]   (--prueba: muestra los avisos sin enviar ni guardar)
 Telegram: variables TELEGRAM_TOKEN y TELEGRAM_CHAT, o config_telegram.json junto al script.
 """
 import json, os, sys, time, urllib.request, urllib.parse, datetime as dt
@@ -323,5 +323,19 @@ def texto_informe(hoy, errores):
     return '\n'.join(lineas)
 
 
+def bucle(minutos):
+    """Revisa cada minuto (10 s despues del cierre de cada vela de 1 min) durante 'minutos'."""
+    fin = time.time() + minutos * 60
+    while time.time() < fin:
+        try:
+            main()
+        except Exception as e:
+            print('Error:', e)
+        time.sleep(max(5, 70 - time.time() % 60))
+
+
 if __name__ == '__main__':
-    main(prueba='--prueba' in sys.argv, informe='--informe' in sys.argv)
+    if '--bucle' in sys.argv:
+        bucle(float(sys.argv[sys.argv.index('--bucle') + 1]))
+    else:
+        main(prueba='--prueba' in sys.argv, informe='--informe' in sys.argv)
