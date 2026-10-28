@@ -1,6 +1,7 @@
 name: Vigia divergencias
-# Cada ejecucion revisa el mercado cada minuto durante 20 min; se lanza cada 15 min y la siguiente
-# espera en cola a que acabe la anterior, asi siempre hay una vigilando (repositorio publico: minutos gratis).
+# Cada ejecucion revisa el mercado cada minuto durante 50 min y al terminar lanza la siguiente (cadena).
+# El cron es solo de reserva (GitHub no siempre lo respeta) y reinicia la cadena el domingo por la noche.
+# Sabado: la cadena se para (mercado cerrado). Repositorio publico: minutos gratis.
 on:
   schedule:
     - cron: '*/15 * * * 1-5'      # lunes a viernes, todo el dia (UTC)
@@ -14,10 +15,13 @@ on:
 concurrency:
   group: vigia
   cancel-in-progress: false
+permissions:
+  actions: write
+  contents: read
 jobs:
   vigia:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,7 +33,7 @@ jobs:
           path: estado
           key: estado-${{ github.run_id }}
           restore-keys: estado-
-      - run: python vigia_divergencias.py ${{ inputs.informe && '--informe' || '--bucle 20' }}
+      - run: python vigia_divergencias.py ${{ inputs.informe && '--informe' || '--bucle 50' }}
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
@@ -39,3 +43,14 @@ jobs:
         with:
           path: estado
           key: estado-${{ github.run_id }}
+      - name: Lanzar la siguiente vigilancia
+        if: always() && !inputs.informe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # no encadenar de viernes 22:00 UTC a domingo 21:00 UTC (mercado cerrado)
+          d=$(date -u +%u); h=$(date -u +%H)
+          if [ "$d" = 6 ] || { [ "$d" = 7 ] && [ "$h" -lt 21 ]; } || { [ "$d" = 5 ] && [ "$h" -ge 22 ]; }; then
+            echo "Mercado cerrado: no se encadena"; exit 0
+          fi
+          gh workflow run vigia.yml -R ${{ github.repository }}
