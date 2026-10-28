@@ -324,14 +324,16 @@ def texto_informe(hoy, errores):
 
 
 def bucle(minutos):
-    """Revisa cada minuto (10 s despues del cierre de cada vela de 1 min) durante 'minutos'."""
+    """Revisa cada minuto, 3 s despues del cierre (asi cada vela de 5 min se analiza a la vez que en TradingView)."""
     fin = time.time() + minutos * 60
     while time.time() < fin:
         try:
             main()
         except Exception as e:
             print('Error:', e)
-        time.sleep(max(5, 70 - time.time() % 60))
+        ahora = time.time()
+        siguiente = (ahora // 60 + 1) * 60 + 3          # 3 s despues del proximo minuto
+        time.sleep(max(1, siguiente - time.time()))
 
 
 if __name__ == '__main__':
