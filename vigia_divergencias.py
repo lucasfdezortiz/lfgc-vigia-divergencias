@@ -14,7 +14,7 @@ Datos: Yahoo Finance 5 min. Oro: futuro GC=F desplazado al precio contado de Swi
 Uso: python3 vigia_divergencias.py [--prueba] [--informe] [--bucle MINUTOS]   (--prueba: muestra los avisos sin enviar ni guardar)
 Telegram: variables TELEGRAM_TOKEN y TELEGRAM_CHAT, o config_telegram.json junto al script.
 """
-import json, os, sys, time, urllib.request, urllib.parse, datetime as dt
+import json, math, os, sys, time, urllib.request, urllib.parse, datetime as dt
 import numpy as np, pandas as pd
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +22,7 @@ ESTADO = os.environ.get('VIGIA_ESTADO') or os.path.join(AQUI, 'data', 'vigia_div
 UA = {'User-Agent': 'Mozilla/5.0'}
 SQ = 'https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD'
 CAPITAL, RIESGO = 820.0, 0.01
+FONDEO, FONDEO_CAP, FONDEO_RIESGO = 'FTMO 10K', 10000.0, 0.015   # cuenta de fondeo: lotes y $ en cada aviso
 N, ESPERA, MIN_SEP, MAX_SEP = 3, 60, 5, 120
 F_ENT, F_T1, F_T2 = 0.236, 0.382, 0.618
 VENTANA = pd.Timedelta(hours=3)        # no se avisa de eventos mas antiguos (primer arranque, retrasos)
@@ -201,6 +202,25 @@ def tamano(a, R, precio):
     return f"{k / 100:.2f} lotes → riesgo ≈ {k * usd_ud:.0f} $ ({k * usd_ud / CAPITAL:.1%}){tope}"
 
 
+def fondeo(a, s):
+    """Lotes y dolares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades)."""
+    if a['tipo'] == 'accion':
+        return "🏦 En la cuenta de fondeo se opera el US100 (otros precios): usa el % de riesgo, no estos niveles."
+    if a['tipo'] == 'oro':
+        usd_lote, nocional = s['R'] * 100, 100 * s['ent']
+    else:
+        usd_lote = s['R'] * 100000 / (s['ent'] if a['yahoo'].startswith('USD') else 1)
+        nocional = 100000 * (1 if a['yahoo'].startswith('USD') else s['ent'])
+    lotes = math.floor(FONDEO_CAP * FONDEO_RIESGO / usd_lote * 100) / 100
+    tope = math.floor(FONDEO_CAP * a['apal'] / nocional * 100) / 100     # mismo apalancamiento prudente que la cuenta propia
+    nota = ' (tope de apalancamiento)' if lotes > tope else ''
+    lotes = max(0.01, min(lotes, tope))
+    sl = lotes * usd_lote
+    g = lambda x: sl * abs(x - s['ent']) / s['R']
+    return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{nota} · SL <b>−{sl:.0f} $</b> · "
+            f"T1 <b>+{g(s['t1']):.0f} $</b> · T2 <b>+{g(s['t2']):.0f} $</b>")
+
+
 def fmt(a, x):
     return f"{x:.{a['dec']}f}"
 
@@ -220,6 +240,7 @@ def mensaje(sim, a, s, evento, t, precio):
             f"🎯 T1 38,2 %: <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
             f"🎯 T2 61,8 %: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R)",
             f"📦 Tamaño (1 % de {CAPITAL:.0f} $): {tamano(a, s['R'], s['ent'])}",
+            fondeo(a, s),
             *([f"⚠️ Stop muy corto: el spread (~{fmt(a, a['coste'])}) es el {a['coste'] / s['R']:.0%} del riesgo."]
               if a['coste'] > 0.25 * s['R'] else []),
             f"⏳ Cancelar si hace nuevo {'máximo' if s['lado'] < 0 else 'mínimo'} ({fmt(a, s['ext'])}) o a las 5 h sin entrar.",
