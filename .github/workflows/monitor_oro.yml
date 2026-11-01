@@ -1,0 +1,50 @@
+name: Monitor oro v2.3
+# Monitor del oro (estrategia v2.3) en la nube: precio cada segundo, plan a las 08:00, senales, gestion y cierre.
+# Cada turno dura 5 h; al terminar guarda datos y estado (cache) y lanza el siguiente turno (cadena continua).
+on:
+  workflow_dispatch:
+    inputs:
+      minutos:
+        description: 'Duracion del turno (min)'
+        default: '300'
+  schedule:
+    - cron: '7 */6 * * *'          # reserva por si la cadena se rompe (GitHub no siempre lo respeta)
+concurrency:
+  group: monitor-oro
+  cancel-in-progress: false
+permissions:
+  actions: write
+  contents: read
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q numpy pandas matplotlib
+      - uses: actions/cache/restore@v4
+        with:
+          path: oro
+          key: oro-${{ github.run_id }}
+          restore-keys: oro-
+      - run: mkdir -p oro data && python monitor_xau.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          XAU_DATA: oro/xau_m1.pkl
+          XAU_ESTADO: oro/estado.json
+          XAU_DURACION_MIN: ${{ inputs.minutos || '300' }}
+          XAU_SIN_AVISO_MAC: '1'
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: oro
+          key: oro-${{ github.run_id }}
+      - name: Lanzar el siguiente turno
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run monitor_oro.yml -R ${{ github.repository }}

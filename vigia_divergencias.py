@@ -7,7 +7,7 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - Orden stop 1 tick tras el 23,6 % del tramo local; SL 1 tick tras el extremo; T1 38,2 %; T2 61,8 %.
   - Confirmaciones: MACD (siempre) + divergencia RSI(14) + menos volumen (en divisas no hay volumen).
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
-  - En 1 min solo se avisa con el filtro completo (si no, serian decenas de avisos al dia) y sin avisos previos.
+  - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). En 1 min, sin avisos previos.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
 Cada aviso lleva el resultado de la auditoria de ese activo (2023-2026, con costes).
 
@@ -41,15 +41,15 @@ SEP = '━━━━━━━━━━━━━━━━━━'
 
 # simbolo Yahoo, nombre, tick, decimales, confirmaciones minimas, tipo de tamano, veredicto de la auditoria
 ACTIVOS = {
-    'QQQ':      dict(yahoo='QQQ', nombre='Nasdaq 100', tick=0.01, dec=2, minconf=1, tipo='accion', coste=0.03, apal=5,
+    'QQQ':      dict(yahoo='QQQ', nombre='Nasdaq 100', tick=0.01, dec=2, minconf=3, tipo='accion', coste=0.03, apal=5,
                      audit='🧪 EN OBSERVACIÓN · Nasdaq M5 3/3 en sesión EE. UU.: PF 1,33 / 1,52 (52 ops 2023-26). Prometedora, no validada.'),
-    'XAUUSD':   dict(yahoo='GC=F', nombre='Oro contado', tick=0.01, dec=2, minconf=1, tipo='oro', coste=0.40, apal=20,
+    'XAUUSD':   dict(yahoo='GC=F', nombre='Oro contado', tick=0.01, dec=2, minconf=3, tipo='oro', coste=0.40, apal=20,
                      audit='⚠️ NO RENTABLE en el backtest del oro (M5 3/3: PF 0,59 / 1,41). Solo para seguir en demo.'),
-    'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=1, tipo='fx', coste=0.00012, apal=30,
+    'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=3, tipo='fx', coste=0.00012, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,45-0,89). Solo para seguir en demo.'),
-    'GBPUSD':   dict(yahoo='GBPUSD=X', nombre='GBP/USD', tick=0.00001, dec=5, minconf=1, tipo='fx', coste=0.00015, apal=30,
+    'GBPUSD':   dict(yahoo='GBPUSD=X', nombre='GBP/USD', tick=0.00001, dec=5, minconf=3, tipo='fx', coste=0.00015, apal=30,
                      audit='⚠️ NO VALIDADA en el backtest (M5: PF 0,47-1,26). Solo para seguir en demo.'),
-    'USDJPY':   dict(yahoo='USDJPY=X', nombre='USD/JPY', tick=0.001, dec=3, minconf=1, tipo='fx', coste=0.015, apal=30,
+    'USDJPY':   dict(yahoo='USDJPY=X', nombre='USD/JPY', tick=0.001, dec=3, minconf=3, tipo='fx', coste=0.015, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,70-1,01). Solo para seguir en demo.'),
 }
 
@@ -164,9 +164,10 @@ def setups(d, a, mins=5):
     return out
 
 
-def vigilancia(d, a):
-    """Avisos previos (sin orden todavia): divergencia formandose o precio cerca del extremo anterior con MACD debil."""
+def vigilancia(d, a, mins=5):
+    """Aviso previo (sin orden todavia): divergencia formandose que ya cumple el filtro completo (MACD + RSI + volumen)."""
     H, L, C, Mc, idx, n = d.High.values, d.Low.values, d.Close.values, d.macd.values, d.index, len(d)
+    Rs, V, hay_vol = d.rsi.values, d.Vol.values, (d.Vol > 0).mean() > 0.5
     tr = np.maximum(H[1:] - L[1:], np.maximum(abs(H[1:] - C[:-1]), abs(L[1:] - C[:-1])))
     atr = tr[-14:].mean(); out = []
     for lado in (-1, 1):
@@ -177,10 +178,11 @@ def vigilancia(d, a):
         p = piv[-1]; nom = 'VENTA' if lado < 0 else 'COMPRA'; ext = 'máximo' if lado < 0 else 'mínimo'
         mas_alla = (lambda x, y: x > y) if lado < 0 else (lambda x, y: x < y)
         debil = (lambda m: m < Mc[p]) if lado < 0 else (lambda m: m > Mc[p])
+        completo = lambda k: ((Rs[k] < Rs[p]) if lado < 0 else (Rs[k] > Rs[p])) and (not hay_vol or V[k] < V[p])
         forma = None
         for k in range(n - 1, n - N - 1, -1):            # vela candidata a pivote, sin las N velas de la derecha
             if MIN_SEP <= k - p <= MAX_SEP and X[k] == (X[k - N:].max() if lado < 0 else X[k - N:].min()) \
-                    and mas_alla(X[k], X[p]) and debil(Mc[k]):
+                    and mas_alla(X[k], X[p]) and debil(Mc[k]) and completo(k):
                 forma = k; break
         clave = f"{'V' if lado < 0 else 'C'}{idx[p]:%Y%m%d%H%M}"
         if forma is not None:
@@ -189,15 +191,10 @@ def vigilancia(d, a):
             out.append((f'forma|{clave}', '\n'.join([
                 f"👀 <b>POSIBLE {nom} FORMÁNDOSE</b> · 5 min",
                 f"Nuevo {ext} <code>{fmt(a, X[k])}</code> más allá del anterior <code>{fmt(a, X[p])}</code>, con el MACD más débil (divergencia).",
-                f"Si en las próximas {faltan} velas (≈{5 * faltan} min) no supera <code>{fmt(a, X[k])}</code>, saldrá la orden:",
+                f"Si en las próximas {faltan} velas (≈{mins * faltan} min) no supera <code>{fmt(a, X[k])}</code>, saldrá la orden:",
                 f"   entrada ≈ <code>{fmt(a, X[k] + lado * 0.236 * tramo)}</code> · SL ≈ <code>{fmt(a, X[k] - lado * a['tick'])}</code> · "
                 f"T2 ≈ <code>{fmt(a, X[k] + lado * 0.618 * tramo)}</code>",
-                "Estate atento; aún no hay orden."])))
-        elif MIN_SEP <= n - 1 - p <= MAX_SEP and 0 < (X[p] - C[-1]) * -lado <= 0.5 * atr and debil(Mc[-1]):
-            out.append((f'cerca|{clave}', '\n'.join([
-                f"👀 <b>CERCA DE UNA POSIBLE {nom}</b> · 5 min",
-                f"Precio <code>{fmt(a, C[-1])}</code> a {fmt(a, abs(X[p] - C[-1]))} del {ext} anterior <code>{fmt(a, X[p])}</code> y el MACD ya está más débil.",
-                f"Si hace un nuevo {ext} y gira, se formará la divergencia y te mando la orden."])))
+                "Cumple ya el filtro completo (MACD, RSI y volumen). Estate atento; aún no hay orden."])))
     return out
 
 
@@ -313,9 +310,9 @@ def main(prueba=False, informe=False, todas=True):
                 di = indicadores(d)
                 audit = audit_tf or a['audit']
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
-                aa = a if tf != '1m' else dict(a, minconf=3)    # 1 min: solo filtro completo
+                aa = a                                          # todas: solo filtro completo (minconf=3)
                 if previos:
-                    for clave, texto in vigilancia(di, a):
+                    for clave, texto in vigilancia(di, a, mins):
                         clave = f'{sim}|{pre}{clave}'
                         if clave not in enviados:
                             salida.append((ahora, texto.replace('</b> · 5 min', f"</b> · {sim} ({a['nombre']}) · {tfl}", 1) + '\n' + audit))
