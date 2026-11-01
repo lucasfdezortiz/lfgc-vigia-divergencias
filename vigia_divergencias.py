@@ -314,6 +314,7 @@ def main(prueba=False, informe=False):
         return
     for m in mensajes:
         tg(m)
+        print('ENVIADO', ahora.strftime('%Y-%m-%d %H:%M'), m.split(chr(10))[0][:120], flush=True)
     estado['enviados'] = sorted(enviados)[-3000:]
     os.makedirs(os.path.dirname(ESTADO), exist_ok=True)
     json.dump(estado, open(ESTADO, 'w'))
@@ -344,12 +345,20 @@ def texto_informe(hoy, errores):
     return '\n'.join(lineas)
 
 
+def mercado_abierto(t=None):
+    """Oro y divisas: de domingo 22:00 a viernes 22:00 UTC."""
+    t = t or dt.datetime.now(dt.timezone.utc)
+    d, h = t.weekday(), t.hour            # lunes = 0 ... domingo = 6
+    return not (d == 5 or (d == 6 and h < 22) or (d == 4 and h >= 22))
+
+
 def bucle(minutos):
     """Revisa cada minuto, 3 s despues del cierre (asi cada vela de 5 min se analiza a la vez que en TradingView)."""
     fin = time.time() + minutos * 60
     while time.time() < fin:
         try:
-            main()
+            if mercado_abierto():
+                main()
         except Exception as e:
             print('Error:', e)
         ahora = time.time()

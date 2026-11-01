@@ -1,7 +1,7 @@
 name: Vigia divergencias
 # Cada ejecucion revisa el mercado cada minuto durante 50 min y al terminar lanza la siguiente (cadena).
-# El cron es solo de reserva (GitHub no siempre lo respeta) y reinicia la cadena el domingo por la noche.
-# Sabado: la cadena se para (mercado cerrado). Repositorio publico: minutos gratis.
+# La cadena no se para nunca: el cron de GitHub no es fiable para rearrancarla. Con el mercado cerrado
+# (viernes 22:00 - domingo 22:00 UTC) el script solo espera, sin pedir datos. Repositorio publico: minutos gratis.
 on:
   schedule:
     - cron: '*/15 * * * 1-5'      # lunes a viernes, todo el dia (UTC)
@@ -47,10 +47,4 @@ jobs:
         if: always() && !inputs.informe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # no encadenar de viernes 22:00 UTC a domingo 21:00 UTC (mercado cerrado)
-          d=$(date -u +%u); h=$(date -u +%H)
-          if [ "$d" = 6 ] || { [ "$d" = 7 ] && [ "$h" -lt 21 ]; } || { [ "$d" = 5 ] && [ "$h" -ge 22 ]; }; then
-            echo "Mercado cerrado: no se encadena"; exit 0
-          fi
-          gh workflow run vigia.yml -R ${{ github.repository }}
+        run: gh workflow run vigia.yml -R ${{ github.repository }}
