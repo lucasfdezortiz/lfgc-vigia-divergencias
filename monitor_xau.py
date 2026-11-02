@@ -47,6 +47,7 @@ HORA_PLAN = 8   # plan del dia a las 08:00 (hora de Espana)
 FONDEO = os.environ.get('XAU_FONDEO_NOMBRE', 'FTMO 10K')
 FONDEO_CAP = float(os.environ.get('XAU_FONDEO_CAPITAL', 10000))
 FONDEO_RIESGO = float(os.environ.get('XAU_FONDEO_RIESGO', 0.015))
+FONDEO_EXTRA = float(os.environ.get('XAU_FONDEO_RIESGO_EXTRA', FONDEO_RIESGO))   # señales fuera de horario (no validadas)
 PREFIJO = ''
 
 
@@ -75,9 +76,9 @@ def usd(lotes, dist):
     return lotes * 100 * dist
 
 
-def lotes_fondeo(s):
-    """Lotes A y B en la cuenta de fondeo: riesgo total = FONDEO_RIESGO del capital, A el doble de lotes que B."""
-    obj = FONDEO_CAP * FONDEO_RIESGO
+def lotes_fondeo(s, riesgo=None):
+    """Lotes A y B en la cuenta de fondeo: riesgo total = riesgo (FONDEO_RIESGO) del capital, A el doble de lotes que B."""
+    obj = FONDEO_CAP * (riesgo or FONDEO_RIESGO)
     dA = abs(s['entry'] - s['slA']); dB = abs(s['entry'] - s['slB'])
     if s.get('useB', s.get('usoB')):
         k = obj / (100 * (2 * dA + dB))
@@ -351,10 +352,12 @@ def msg_senal(s, bal=CUENTA, fuera=False):
           "🔁 Cuando A toque TP → " + (f"mueve el SL de B a la entrada {px(s['entry'])} (break-even)." if s['useB'] else 'operación terminada.'),
           "⏰ Cerrar todo a las 22:00 si sigue abierta.",
           "⚠️ Confirma los niveles en tu MT5 (el precio del broker puede variar unos céntimos)."]
-    fA, fB = lotes_fondeo(s)
+    rf = FONDEO_EXTRA if fuera else FONDEO_RIESGO
+    fA, fB = lotes_fondeo(s, rf)
     frA, fgA = usd(fA, abs(s['entry'] - s['slA'])), usd(fA, abs(s['tpA'] - s['entry']))
     l += [SEP,
-          f"🏦 <b>CUENTA DE FONDEO · {FONDEO}</b> (riesgo {FONDEO_RIESGO:.1%} = {FONDEO_CAP * FONDEO_RIESGO:.0f} $)",
+          f"🏦 <b>CUENTA DE FONDEO · {FONDEO}</b> (riesgo {rf:.1%} = {FONDEO_CAP * rf:.0f} $"
+          + (", operación extra no validada)" if fuera else ")"),
           f"🅰️ <b>{fA:.2f} lotes</b> · SL → <b>−{frA:.0f} $</b> · TP → <b>+{fgA:.0f} $</b>"]
     if fB:
         frB, fgB = usd(fB, abs(s['entry'] - s['slB'])), usd(fB, abs(s['tpB'] - s['entry']))
@@ -364,7 +367,7 @@ def msg_senal(s, bal=CUENTA, fuera=False):
     else:
         l += [f"⚖️ Si salta el SL: <b>−{frA:.0f} $</b> ({frA / FONDEO_CAP:.1%}) · si llega al TP: <b>+{fgA:.0f} $</b>"]
     l += [f"📏 Límites {FONDEO}: pérdida diaria máx. {FONDEO_CAP * 0.05:.0f} $ · total {FONDEO_CAP * 0.10:.0f} $. "
-          ("Tras 1 pérdida en el día, no operes más." if FONDEO_RIESGO >= 0.025 else "Tras 2 pérdidas en el día, no operes más.")]
+          + ("Tras 1 pérdida en el día, no operes más." if FONDEO_RIESGO >= 0.025 else "Tras 2 pérdidas en el día, no operes más.")]
     return (AVISO_FUERA if fuera else '') + '\n'.join(l)
 
 

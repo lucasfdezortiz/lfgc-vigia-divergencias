@@ -39,6 +39,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
           VIGIA_ESTADO: estado/vigia.json
+          VIGIA_FONDEO_RIESGO: '0.005'     # divergencias: 0,5 % (extra no validada)
           AVISOS_ISSUE: '2'                # copia de los avisos del oro en la issue n.º 2
           GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/cache/save@v4

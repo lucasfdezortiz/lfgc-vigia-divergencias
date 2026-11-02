@@ -23,7 +23,8 @@ ESTADO = os.environ.get('VIGIA_ESTADO') or os.path.join(AQUI, 'data', 'vigia_div
 UA = {'User-Agent': 'Mozilla/5.0'}
 SQ = 'https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD'
 CAPITAL, RIESGO = 820.0, 0.01
-FONDEO, FONDEO_CAP, FONDEO_RIESGO = 'FTMO 10K', 10000.0, 0.015   # cuenta de fondeo: lotes y $ en cada aviso
+FONDEO, FONDEO_CAP = 'FTMO 10K', 10000.0                          # cuenta de fondeo: lotes y $ en cada aviso
+FONDEO_RIESGO = float(os.environ.get('VIGIA_FONDEO_RIESGO', 0.015))   # 0,5 % en la nube: operación extra no validada
 N, ESPERA, MIN_SEP, MAX_SEP = 3, 60, 5, 120
 F_ENT, F_T1, F_T2 = 0.236, 0.382, 0.618
 VENTANA = pd.Timedelta(hours=3)        # no se avisa de eventos mas antiguos (primer arranque, retrasos)
