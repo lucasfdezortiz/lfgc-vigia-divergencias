@@ -441,7 +441,7 @@ def msg_control(e, prov=None, operadas=0):
         estado = ('🟠 PREPARADO (el precio ya tocó la zona): vigilar el gatillo en 5 min' if e['preparado'] else
                   'provisional (extremo sin confirmar)' if p is prov else 'oficial')
         l += [f"📐 Pauta {estado}", *_cuerpo_nivel(e, p, operadas)]
-    l += [SEP, "🔎 Divergencias (Trullás, 5 y 15 min): las avisa el vigía aparte.",
+    l += [SEP, "🔎 Divergencias (Trullás, 1, 5 y 15 min y 1 h): las avisa el vigía aparte.",
           "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; lo demás es para estar atento.</i>"]
     return '\n'.join(l)
 
