@@ -412,6 +412,40 @@ def avisos_nivel(e, operadas=0, prov=None):
     return out
 
 
+CONTROLES = [(11, 0), (13, 0), (15, 35), (18, 0)]   # hora de España: apertura de la ventana, mediodía, tras abrir NY, tarde
+
+
+def msg_control(e, prov=None, operadas=0):
+    """Foto del oro a horas fijas, todos los días, para que Lucas valore por sí mismo si hay oportunidad."""
+    d = e['bias']; p = e if e['pauta'] and e['retr'] <= P['fmax'] else prov
+    a_favor = lambda x: '✅ a favor' if d and x * d > 0 else '❌ en contra' if d else '—'
+    l = [f"📊 <b>PUNTO DE CONTROL · XAUUSD · {hora_es(e['t'])}</b>",
+         f"💰 Precio {px(e['precio'])}",
+         SEP,
+         f"1️⃣ Diario {ico(d)} · 2️⃣ Horario {ico(e['h1'])} · ADX {e['adx']:.1f} {'✅' if e['adx_ok'] else '⚠️ (&lt; 20)'}",
+         f"📏 Máx. ayer {px(e['pdh'])} · Mín. ayer {px(e['pdl'])}",
+         f"📏 Resistencia H1 {px(e['res'])} · Soporte H1 {px(e['sop'])}",
+         f"⏱ 5 min: EMA 9 {'&gt;' if e['ema_f'] > e['ema_s'] else '&lt;'} EMA 21 ({a_favor(e['ema_f'] - e['ema_s'])}) · "
+         f"MACD {e['macd_hist']:+.2f} ({a_favor(e['macd_hist'])})"]
+    if d == 0:
+        l += [SEP, '⛔ Diario neutral: hoy la v2.3 no opera.']
+    elif e['h1'] != d:
+        l += [SEP, '⏸ Diario y horario no coinciden: la v2.3 espera a que se alineen.']
+    elif p is None:
+        if e['pauta']:
+            l += [SEP, f"⛔ La pauta {px(e['ori'])} ➜ {px(e['ext'])} está anulada (retroceso {e['retr']*100:.0f} %). "
+                       f"Esperar un nuevo {'mínimo' if d < 0 else 'máximo'} en 1 hora."]
+        else:
+            l += [SEP, '⏸ Aún no hay impulso válido en 1 hora: esperar.']
+    else:
+        estado = ('🟠 PREPARADO (el precio ya tocó la zona): vigilar el gatillo en 5 min' if e['preparado'] else
+                  'provisional (extremo sin confirmar)' if p is prov else 'oficial')
+        l += [f"📐 Pauta {estado}", *_cuerpo_nivel(e, p, operadas)]
+    l += [SEP, "🔎 Divergencias (Trullás, 5 y 15 min): las avisa el vigía aparte.",
+          "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; lo demás es para estar atento.</i>"]
+    return '\n'.join(l)
+
+
 def msg_senal(s, bal=CUENTA, fuera=False):
     d = s['dir']; lado = 'VENTA' if d < 0 else 'COMPRA'; col = '🔴' if d < 0 else '🟢'
     rA = usd(LOTE_A, abs(s['entry'] - s['slA'])); gA = usd(LOTE_A, abs(s['tpA'] - s['entry']))
@@ -710,6 +744,15 @@ def main():
                 m1 = m1.sort_index(); win, _, _, e = analizar(m1, ahora)
                 enviar_cierre(win, e, ops_dia.get(ahora.date(), []), ahora.normalize())
 
+            for hh, mm in CONTROLES:                       # puntos de control diarios (clave = hora + 4 s)
+                tc = pd.Timestamp(local.date()).tz_localize(MADRID).replace(hour=hh, minute=mm).tz_convert('UTC') + pd.Timedelta(seconds=4)
+                if laborable and fresca and tc <= ahora < tc + pd.Timedelta(minutes=30) and tc not in avisados_prep:
+                    avisados_prep.add(tc)
+                    try:
+                        m1 = m1.sort_index(); win, _, _, e = analizar(m1, ahora)
+                        tg(msg_control(e, pauta_formandose(win, e['h1_velas'], e), len(ops_dia.get(ahora.date(), []))))
+                    except Exception:
+                        log('Error en punto de control: ' + traceback.format_exc().splitlines()[-1])
             barra = ahora.floor('5min') - pd.Timedelta(minutes=5)
             if fresca and barra != ultima_eval and (ahora - ahora.floor('5min')) >= pd.Timedelta(seconds=3):
                 ultima_eval = barra
