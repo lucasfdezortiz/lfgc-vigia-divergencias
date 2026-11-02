@@ -137,6 +137,22 @@ def tg(texto, foto=None, pie=None):
             _api('sendPhoto', {'chat_id': cfg()['chat_id'], 'caption': pie or '', 'parse_mode': 'HTML'}, foto)
     except Exception as e:
         log(f'Error enviando a Telegram: {e}')
+    copia_github(plano)
+
+
+def copia_github(plano):
+    """En la nube: copia el aviso como comentario de la issue AVISOS_ISSUE (la lee Claude)."""
+    n, repo, token = (os.environ.get(k) for k in ('AVISOS_ISSUE', 'GITHUB_REPOSITORY', 'GITHUB_TOKEN'))
+    if not (n and repo and token):
+        return
+    try:
+        cuerpo = json.dumps({'body': f'`{dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC`\n\n{plano}'}).encode()
+        req = urllib.request.Request(f'https://api.github.com/repos/{repo}/issues/{n}/comments', data=cuerpo,
+                                     headers={'Authorization': f'Bearer {token}',
+                                              'Accept': 'application/vnd.github+json'})
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception as e:
+        log(f'Error copiando el aviso a GitHub: {e}')
 
 
 def setup():
