@@ -11,7 +11,8 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
 Cada aviso lleva el resultado de la auditoria de ese activo (2023-2026, con costes).
 
-Datos: Yahoo Finance (1m, 5m, 15m, 60m). Oro: futuro GC=F desplazado al precio contado de Swissquote (XAUUSD de MT5).
+Datos: Yahoo Finance (1m, 5m, 15m, 60m). Oro: contado de Dukascopy en tiempo real (desde 2026-11-02; Yahoo daba el futuro
+GC=F con ~10 min de retraso); si Dukascopy falla, GC=F desplazado al precio contado de Swissquote (XAUUSD de MT5).
 Uso: python3 vigia_divergencias.py [--prueba] [--informe] [--bucle MINUTOS]   (--prueba: muestra los avisos sin enviar ni guardar)
 Telegram: variables TELEGRAM_TOKEN y TELEGRAM_CHAT, o config_telegram.json junto al script.
 """
@@ -77,6 +78,35 @@ def velas(yahoo, tf='5m'):
     d = d[~d.index.duplicated(keep='last')].dropna(subset=['Open', 'High', 'Low', 'Close'])
     d['Vol'] = d.Vol.fillna(0)
     ahora = pd.Timestamp.now(tz='UTC')
+    return d[d.index + pd.Timedelta(minutes=mins) <= ahora]       # solo velas cerradas
+
+
+DUKA = ('https://freeserv.dukascopy.com/2.0/?path=chart/json3&instrument=XAU%2FUSD&offer_side=B&interval={iv}'
+        '&splits=true&stocks=true&limit=1500&time_direction=P&timestamp={ts}&jsonp=_cb')
+DUKA_IV = {'1m': '1MIN', '5m': '5MIN', '15m': '15MIN', '1h': '1HOUR'}
+
+
+def velas_oro(tf):
+    """Oro al contado en tiempo real (Dukascopy, la misma fuente que el backtest). Yahoo da el futuro GC con ~10 min
+    de retraso, y en 1 min eso hacía llegar tarde los avisos."""
+    mins = TFS[tf][0]
+    ahora = pd.Timestamp.now(tz='UTC')
+    req = urllib.request.Request(DUKA.format(iv=DUKA_IV[tf], ts=int(ahora.timestamp() * 1000)),
+                                 headers=dict(UA, Referer='https://freeserv.dukascopy.com/'))
+    for i in range(3):
+        try:
+            t = urllib.request.urlopen(req, timeout=20).read().decode()
+            break
+        except Exception:
+            if i == 2:
+                raise
+            time.sleep(3 * (i + 1))
+    a = json.loads(t[t.index('(') + 1:t.rindex(')')])
+    d = pd.DataFrame(a, columns=['t', 'Open', 'High', 'Low', 'Close', 'Vol'])
+    d.index = pd.to_datetime(d.pop('t'), unit='ms', utc=True)
+    d = d.sort_index(); d = d[~d.index.duplicated(keep='last')]
+    if len(d) < 100 or ahora - d.index[-1] > pd.Timedelta(minutes=2 * mins + 10) and mercado_abierto(ahora):
+        raise ValueError('Dukascopy sin datos recientes')
     return d[d.index + pd.Timedelta(minutes=mins) <= ahora]       # solo velas cerradas
 
 
@@ -254,7 +284,8 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None):
             f"🎯 T1 38,2 %: <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
             f"🎯 T2 61,8 %: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R)",
             f"📦 Tamaño (1 % de {CAPITAL:.0f} $): {tamano(a, s['R'], s['ent'])}",
-            fondeo(a, s) if tfl != '1 min' else '🏦 FTMO 10K: ⛔ no se opera (1 min llega con ~10 min de retraso y no es rentable).',
+            fondeo(a, s) + ('\n⚠️ 1 min fuera del plan de fondeo: en el backtest no es rentable (oro PF 0,03–0,73). '
+                            'Si la operas, es decisión tuya y va al 0,5 %.' if tfl == '1 min' else ''),
             *([f"⚠️ Stop muy corto: el spread (~{fmt(a, a['coste'])}) es el {a['coste'] / s['R']:.0%} del riesgo."]
               if a['coste'] > 0.25 * s['R'] else []),
             f"⏳ Cancelar si hace nuevo {'máximo' if s['lado'] < 0 else 'mínimo'} ({fmt(a, s['ext'])}) o tras 60 velas sin entrar.",
@@ -319,19 +350,26 @@ def main(prueba=False, informe=False, todas=True):
             continue
         for sim, a in ACTIVOS.items():
             try:
-                d = velas(a['yahoo'], tf)
-                if sim == 'XAUUSD':                           # futuro GC -> precio contado (lo que ves en MT5)
+                d = None
+                if sim == 'XAUUSD':                           # contado en tiempo real; si falla, futuro GC desplazado
                     try:
-                        if base_oro is None:
-                            base_oro = oro_contado() - d.Close.iloc[-1]
-                        d[['Open', 'High', 'Low', 'Close']] += base_oro
-                    except Exception:
-                        errores.append('oro contado no disponible: niveles del futuro GC')
+                        d = velas_oro(tf)
+                    except Exception as ex:
+                        errores.append(f'oro {tf}: Dukascopy no disponible ({ex}); se usa Yahoo con ~10 min de retraso')
+                if d is None:
+                    d = velas(a['yahoo'], tf)
+                    if sim == 'XAUUSD':                       # futuro GC -> precio contado (lo que ves en MT5)
+                        try:
+                            if base_oro is None:
+                                base_oro = oro_contado() - d.Close.iloc[-1]
+                            d[['Open', 'High', 'Low', 'Close']] += base_oro
+                        except Exception:
+                            errores.append('oro contado no disponible: niveles del futuro GC')
                 di = indicadores(d)
                 audit = audit_tf or a['audit']
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
                 aa = a                                          # todas: solo filtro completo (minconf=3)
-                if previos:
+                if previos or sim == 'XAUUSD':               # en el oro, aviso previo también en 1 min (pedido por Lucas)
                     for clave, texto in vigilancia(di, a, mins):
                         clave = f'{sim}|{pre}{clave}'
                         if clave not in enviados:
