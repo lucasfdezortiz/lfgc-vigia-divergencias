@@ -254,7 +254,7 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None):
             f"🎯 T1 38,2 %: <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
             f"🎯 T2 61,8 %: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R)",
             f"📦 Tamaño (1 % de {CAPITAL:.0f} $): {tamano(a, s['R'], s['ent'])}",
-            fondeo(a, s),
+            fondeo(a, s) if tfl != '1 min' else '🏦 FTMO 10K: ⛔ no se opera (1 min llega con ~10 min de retraso y no es rentable).',
             *([f"⚠️ Stop muy corto: el spread (~{fmt(a, a['coste'])}) es el {a['coste'] / s['R']:.0%} del riesgo."]
               if a['coste'] > 0.25 * s['R'] else []),
             f"⏳ Cancelar si hace nuevo {'máximo' if s['lado'] < 0 else 'mínimo'} ({fmt(a, s['ext'])}) o tras 60 velas sin entrar.",
