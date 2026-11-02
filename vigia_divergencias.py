@@ -277,6 +277,25 @@ def tg(texto):
         tok, chat = c['token'], c['chat_id']
     datos = urllib.parse.urlencode({'chat_id': chat, 'text': texto, 'parse_mode': 'HTML'}).encode()
     urllib.request.urlopen(f'https://api.telegram.org/bot{tok}/sendMessage', data=datos, timeout=30).read()
+    if 'XAUUSD' in texto:
+        copia_github(texto)
+
+
+def copia_github(texto):
+    """En la nube: copia los avisos del oro como comentario de la issue AVISOS_ISSUE (la lee Claude)."""
+    n, repo, token = (os.environ.get(k) for k in ('AVISOS_ISSUE', 'GITHUB_REPOSITORY', 'GITHUB_TOKEN'))
+    if not (n and repo and token):
+        return
+    try:
+        import re, html
+        plano = html.unescape(re.sub('<[^>]+>', '', texto))
+        cuerpo = json.dumps({'body': f'`{dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC`\n\n{plano}'}).encode()
+        req = urllib.request.Request(f'https://api.github.com/repos/{repo}/issues/{n}/comments', data=cuerpo,
+                                     headers={'Authorization': f'Bearer {token}',
+                                              'Accept': 'application/vnd.github+json'})
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception as e:
+        print('Error copiando el aviso a GitHub:', e, flush=True)
 
 
 def cargar_estado():

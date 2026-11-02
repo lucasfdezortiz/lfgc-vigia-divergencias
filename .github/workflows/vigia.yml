@@ -18,6 +18,7 @@ concurrency:
 permissions:
   actions: write
   contents: read
+  issues: write
 jobs:
   vigia:
     runs-on: ubuntu-latest
@@ -38,6 +39,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
           VIGIA_ESTADO: estado/vigia.json
+          AVISOS_ISSUE: '2'                # copia de los avisos del oro en la issue n.º 2
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/cache/save@v4
         if: always()
         with:
