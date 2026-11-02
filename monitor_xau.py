@@ -325,6 +325,93 @@ def msg_preparado(e, fuera=False):
     return (AVISO_FUERA + texto) if fuera else texto
 
 
+CERCA = 0.12   # aviso de nivel clave cuando el retroceso llega al 21 % (12 puntos antes del 1/3)
+
+
+def pauta_formandose(win, h1, e):
+    """Pauta H1 cuyo extremo aún no está confirmado (le faltan velas a la derecha): las mismas cuentas que
+    M.estado, pero con el último máximo/mínimo provisional. La pauta oficial llega horas después,
+    a menudo con el precio ya dentro de la zona. Se exige al menos 1 vela H1 cerrada sin extremo nuevo
+    (si no, en plena caída avisaría cada hora)."""
+    d = e['bias']; N = P['swing']
+    if d == 0 or e['h1'] != d:
+        return None
+    tclose = e['t']; c = min(h1.index.searchsorted(tclose.floor('1h')), len(h1))
+    h = h1.iloc[:c]; H, L = h.High.values, h.Low.values; X = L if d < 0 else H
+    mejor = (lambda a, b: a < b) if d < 0 else (lambda a, b: a > b)
+    k = next((i for i in range(c - 2, c - N - 1, -1) if i >= N and all(mejor(X[i], X[j]) or X[i] == X[j] for j in range(i - N, i))
+              and all(mejor(X[i], X[j]) for j in range(i + 1, c))), None)
+    if k is None or (e['pauta'] and e['ext_t'] == h.index[k]):
+        return None
+    sh, sl = M.swings(h, N); of = sh if d < 0 else sl
+    iOri = next((i for i in range(k - 1, max(c - P['lookback'], 0), -1) if of[i]), None)
+    if iOri is None:
+        return None
+    tr = pd.concat([h.High - h.Low, (h.High - h.Close.shift()).abs(), (h.Low - h.Close.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1]
+    ext, ori = X[k], (H[iOri] if d < 0 else L[iOri]); rng = abs(ori - ext)
+    seg = win.loc[h.index[k] + pd.Timedelta(hours=1):tclose - pd.Timedelta(minutes=1)]
+    if rng < P['minimp'] * atr or (len(seg) and ((d < 0 and seg.Low.min() < ext) or (d > 0 and seg.High.max() > ext))):
+        return None
+    deep = (seg.High.max() if d < 0 else seg.Low.min()) if len(seg) else ext
+    retr = abs(deep - ext) / rng
+    if retr > P['fmax']:
+        return None
+    z1, z2 = ext - d * P['fmin'] * rng, ext - d * P['fmax'] * rng
+    return dict(ext=ext, ori=ori, ext_t=h.index[k], retr=retr, retr_ahora=abs(e['precio'] - ext) / rng,
+                zona_a=min(z1, z2), zona_b=max(z1, z2), oficial=h.index[k] + pd.Timedelta(hours=N + 1))
+
+
+def _cuerpo_nivel(e, p, operadas):
+    d = e['bias']; lado = 'VENTA' if d < 0 else 'COMPRA'
+    inval = p['zona_b'] if d < 0 else p['zona_a']
+    borde = p['zona_a'] if d < 0 else p['zona_b']
+    dentro = p['zona_a'] <= e['precio'] <= p['zona_b']
+    ok = lambda c: '✅' if c else '⬜'
+    ini, fin = e['t'].normalize() + pd.Timedelta(hours=P['start']), e['t'].normalize() + pd.Timedelta(hours=P['end'])
+    return [SEP,
+            f"Impulso H1 {px(p['ori'])} ➜ {px(p['ext'])}",
+            f"🎯 Zona de {lado.lower()}: <b>{px(p['zona_a'])} – {px(p['zona_b'])}</b>"
+            + (' (el precio ya está dentro)' if dentro else f" (a {abs(e['precio'] - borde):.1f} $)"),
+            f"⛔ Se anula si {'sube por encima' if d < 0 else 'baja por debajo'} de {px(inval)} (más de 2/3)",
+            f"🛑 SL de B en el origen ±1 $ ≈ {px(p['ori'] - d * 1)} · los lotes exactos llegan con la SEÑAL",
+            SEP, "<b>Qué tiene que cumplirse para entrar:</b>",
+            f"✅ Diario {ico(d)}",
+            f"✅ Horario {ico(e['h1'])} (EMA 20 {'&lt;' if d < 0 else '&gt;'} EMA 50)",
+            f"{ok(e['adx_ok'])} ADX &gt; 20 en 1 hora (ahora {e['adx']:.1f})",
+            f"{ok(dentro)} Precio dentro de la zona (retroceso ahora {p['retr_ahora']*100:.0f} %, hace falta 33–67 %)",
+            f"{ok(en_horario(e['t']))} Hora de señales validadas ({hora_es(ini)}–{hora_es(fin)} España)",
+            f"{ok(operadas == 0)} Sin operación v2.3 hoy (máximo 1 al día con el 3 %)",
+            f"⬜ Gatillo en 5 min: EMA 9 cruza {'por debajo' if d < 0 else 'por encima'} de la EMA 21 con el "
+            f"histograma MACD {'rojo' if d < 0 else 'verde'}, al cierre de la vela"]
+
+
+def avisos_nivel(e, operadas=0, prov=None):
+    """Avisos previos al PREPARADO, cada uno una vez por extremo H1 (claves = ext_t + 1/2/3 s, guardadas
+    junto a las de los PREPARADO, que usan ext_t a secas):
+    📐 pauta formándose (extremo sin confirmar) · 📐 pauta nueva · 📍 precio acercándose a la zona."""
+    if e['bias'] == 0 or e['h1'] != e['bias']:
+        return []
+    lado = 'VENTA' if e['bias'] < 0 else 'COMPRA'
+    cab = f"🕐 {hora_es(e['t'])} · 💰 Precio {px(e['precio'])}"
+    out = []
+    if prov:
+        nuevo = 'mínimo' if e['bias'] < 0 else 'máximo'
+        out.append((prov['ext_t'] + pd.Timedelta(seconds=3), '\n'.join([
+            f"📐 <b>PAUTA FORMÁNDOSE · {lado} XAUUSD</b>", cab,
+            f"<i>Provisional: el {nuevo} de las {hora_es(prov['ext_t'])} se confirma a las {hora_es(prov['oficial'])} "
+            f"si no se hace un {nuevo} nuevo antes. Entonces llegará el PREPARADO.</i>",
+            *_cuerpo_nivel(e, prov, operadas)])))
+    if e['pauta'] and e['retr'] < P['fmin']:
+        out.append((e['ext_t'] + pd.Timedelta(seconds=2),
+                    '\n'.join([f"📐 <b>NUEVA PAUTA · {lado} XAUUSD</b>", cab, *_cuerpo_nivel(e, e, operadas)])))
+        if e['retr_ahora'] >= P['fmin'] - CERCA:
+            out.append((e['ext_t'] + pd.Timedelta(seconds=1),
+                        '\n'.join([f"📍 <b>NIVEL CLAVE · {lado} XAUUSD</b> · el precio se acerca a la zona", cab,
+                                   *_cuerpo_nivel(e, e, operadas)])))
+    return out
+
+
 def msg_senal(s, bal=CUENTA, fuera=False):
     d = s['dir']; lado = 'VENTA' if d < 0 else 'COMPRA'; col = '🔴' if d < 0 else '🟢'
     rA = usd(LOTE_A, abs(s['entry'] - s['slA'])); gA = usd(LOTE_A, abs(s['tpA'] - s['entry']))
@@ -426,7 +513,9 @@ def analizar(m1, ahora, PP=None):
     m5, h1, d1 = M.prep(win)
     m5 = m5[m5.index + pd.Timedelta(minutes=5) <= ahora.floor('5min')]
     t = M.run(win, m5, h1, d1, PP)
-    return win, m5, t, M.estado(win, m5, h1, d1, PP)
+    e = M.estado(win, m5, h1, d1, PP)
+    e['h1_velas'] = h1                                   # para pauta_formandose
+    return win, m5, t, e
 
 
 def en_horario(ts):
@@ -614,6 +703,8 @@ def main():
             if laborable and fresca and local.hour >= HORA_PLAN and local.hour < 12 and ultimo_plan != local.date():
                 ultimo_plan = local.date()
                 m1 = m1.sort_index(); win, _, _, e = analizar(m1, ahora); enviar_plan(win, e)
+                if e['pauta']:
+                    avisados_prep.add(e['ext_t'] + pd.Timedelta(seconds=2))   # el plan ya la cuenta
             if laborable and ahora.hour == P['close'] and ahora.minute >= 5 and ultimo_cierre != ahora.date():
                 ultimo_cierre = ahora.date()
                 m1 = m1.sort_index(); win, _, _, e = analizar(m1, ahora)
@@ -650,6 +741,13 @@ def main():
                         ops_dia.setdefault(ahora.date(), []).append(op)
                     elif el['preparado'] and el['ext_t'] not in avisados_prep:
                         avisados_prep.add(el['ext_t']); tg(msg_preparado(el, fuera=True))
+                if op is None and laborable and local.hour >= HORA_PLAN and ahora.hour < P['end']:
+                    try:                                   # avisos previos: un fallo aquí no debe frenar el monitor
+                        for clave, texto in avisos_nivel(e, len(ops_dia.get(ahora.date(), [])), pauta_formandose(win, e['h1_velas'], e)):
+                            if clave not in avisados_prep:
+                                avisados_prep.add(clave); tg(texto)
+                    except Exception:
+                        log('Error en avisos de nivel: ' + traceback.format_exc().splitlines()[-1])
                 log(f"M5 {hora_es(ult + pd.Timedelta(minutes=5))} precio {e['precio']:.2f} | diario {e['bias']} h1 {e['h1']} "
                     f"adx {e['adx']:.1f} | pauta {e['pauta']} zona {e['zona']} preparado {e['preparado']}")
         except KeyboardInterrupt:
