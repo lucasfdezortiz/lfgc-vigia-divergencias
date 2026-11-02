@@ -39,6 +39,7 @@ jobs:
           XAU_ESTADO: oro/estado.json
           XAU_DURACION_MIN: ${{ inputs.minutos || '300' }}
           XAU_SIN_AVISO_MAC: '1'
+          XAU_FONDEO_RIESGO: '0.03'        # FTMO 10K: 3 % por señal (decidido por Lucas el 2026-11-02)
           AVISOS_ISSUE: '1'                # copia de cada aviso en la issue n.º 1
           GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/cache/save@v4

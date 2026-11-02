@@ -364,7 +364,7 @@ def msg_senal(s, bal=CUENTA, fuera=False):
     else:
         l += [f"⚖️ Si salta el SL: <b>−{frA:.0f} $</b> ({frA / FONDEO_CAP:.1%}) · si llega al TP: <b>+{fgA:.0f} $</b>"]
     l += [f"📏 Límites {FONDEO}: pérdida diaria máx. {FONDEO_CAP * 0.05:.0f} $ · total {FONDEO_CAP * 0.10:.0f} $. "
-          "Tras 2 pérdidas en el día, no operes más."]
+          ("Tras 1 pérdida en el día, no operes más." if FONDEO_RIESGO >= 0.025 else "Tras 2 pérdidas en el día, no operes más.")]
     return (AVISO_FUERA if fuera else '') + '\n'.join(l)
 
 
