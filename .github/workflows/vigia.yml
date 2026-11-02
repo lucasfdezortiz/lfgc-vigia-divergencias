@@ -51,4 +51,10 @@ jobs:
         if: always() && !inputs.informe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run vigia.yml -R ${{ github.repository }}
+        run: |
+          # reintentos: un error 500 de GitHub al lanzar la siguiente ejecucion rompia la cadena
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            gh workflow run vigia.yml -R ${{ github.repository }} && exit 0
+            sleep 30
+          done
+          exit 1
