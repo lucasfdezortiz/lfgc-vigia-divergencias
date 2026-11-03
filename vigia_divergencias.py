@@ -110,6 +110,52 @@ def velas_oro(tf):
     return d[d.index + pd.Timedelta(minutes=mins) <= ahora]       # solo velas cerradas
 
 
+def tendencia_oro():
+    """Contexto v2.3 del oro para la nota de fiabilidad: sesgo diario (cierre y EMA 20 frente a EMA 50 del ultimo dia
+    cerrado) y tendencia horaria (EMA 20 frente a EMA 50 en 1 h). +1 alcista, -1 bajista, 0 neutral."""
+    ahora = pd.Timestamp.now(tz='UTC')
+    req = urllib.request.Request(DUKA.format(iv='1DAY', ts=int(ahora.timestamp() * 1000)).replace('limit=1500', 'limit=300'),
+                                 headers=dict(UA, Referer='https://freeserv.dukascopy.com/'))
+    t = urllib.request.urlopen(req, timeout=20).read().decode()
+    d = pd.DataFrame(json.loads(t[t.index('(') + 1:t.rindex(')')]), columns=['t', 'Open', 'High', 'Low', 'Close', 'Vol'])
+    d.index = pd.to_datetime(d.pop('t'), unit='ms', utc=True)
+    d = d.sort_index()
+    d = d[(d.Vol > 0.2 * d.Vol.median()) & (d.index + pd.Timedelta(days=1) <= ahora)]   # sin domingos cortos ni el dia en curso
+    e = lambda s, n: s.ewm(span=n, adjust=False).mean()
+    c, f, s = d.Close.iloc[-1], e(d.Close, 20).iloc[-1], e(d.Close, 50).iloc[-1]
+    h = velas_oro('1h')
+    return dict(diario=1 if c > s and f > s else -1 if c < s and f < s else 0,
+                horario=int(np.sign(e(h.Close, 20).iloc[-1] - e(h.Close, 50).iloc[-1])))
+
+
+def nota_oro(tf, lado, R, ctx):
+    """Nota de fiabilidad del oro: mezcla de la divergencia con el contexto de la v2.3 y el tamano del stop.
+    Cifras de backtest/mezcla_divergencias_v23.py (3/3, objetivo T2, coste 0,40 $/oz, 2025-2026). Devuelve (icono, texto)."""
+    if ctx is None:
+        return '⚪', '🧭 Fiabilidad: sin contexto de tendencia ahora mismo (fallo de datos).'
+    d, h = ctx['diario'] * lado, ctx['horario'] * lado
+    contra = d < 0 and h < 0
+    if tf == '1m':
+        if R >= 2 and not contra:
+            g, por = '🟢 ALTA', 'PF 2,4 en 37 ops (1 min, SL ≥ 2 $ y sin ir contra diario y horario a la vez)'
+        elif R >= 1.5:
+            g, por = '🟡 MEDIA', 'PF 1,5–1,9 (1 min con SL ≥ 1,5 $)'
+        else:
+            g, por = '🔴 BAJA', 'PF < 1 en 125 ops (1 min con SL < 1,5 $: el coste se come la ventaja)'
+    elif tf == '5m':
+        if R < 1:
+            g, por = '🔴 BAJA', 'stop < 1 $: el coste se come la ventaja'
+        elif not contra:
+            g, por = '🟢 ALTA', 'PF 2,1 en 21 ops (5 min sin ir contra diario y horario a la vez)'
+        else:
+            g, por = '🟡 MEDIA', 'PF 1,0 en 25 ops (5 min contra el diario y el horario)'
+    else:
+        g, por = '🟡 MEDIA', 'pocas señales en 15 min y 1 h (PF 1,1–1,5, sin validar)'
+    ico = lambda x: '✅ a favor' if x > 0 else '❌ en contra' if x < 0 else '➖ neutral'
+    return g[0], (f"🧭 <b>Fiabilidad {g}</b> · diario {ico(d)} · horario {ico(h)} · SL {R:.2f} $\n"
+                  f"   Histórico 2025-26 de este tipo: {por}. Muestra pequeña: extra al 0,5 %, decides tú.")
+
+
 def velas_5m(yahoo):
     return velas(yahoo, '5m')
 
@@ -219,7 +265,7 @@ def vigilancia(d, a, mins=5):
         if forma is not None:
             k = forma; medio = L[p:k + 1].min() if lado < 0 else H[p:k + 1].max(); tramo = abs(X[k] - medio)
             faltan = N - (n - 1 - k)
-            out.append((f'forma|{clave}', '\n'.join([
+            out.append((f'forma|{clave}', lado, 0.236 * tramo + a['tick'], '\n'.join([
                 f"👀 <b>POSIBLE {nom} FORMÁNDOSE</b> · 5 min",
                 f"Nuevo {ext} <code>{fmt(a, X[k])}</code> más allá del anterior <code>{fmt(a, X[p])}</code>, con el MACD más débil (divergencia).",
                 f"Si en las próximas {faltan} velas (≈{mins * faltan} min) no supera <code>{fmt(a, X[k])}</code>, saldrá la orden:",
@@ -269,7 +315,7 @@ def fmt(a, x):
     return f"{x:.{a['dec']}f}"
 
 
-def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None):
+def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None, nota=None):
     lado = 'VENTA' if s['lado'] < 0 else 'COMPRA'
     hora = t.tz_convert('Europe/Madrid').strftime('%H:%M')
     rr = lambda x: abs(x - s['ent']) / s['R'] if s['R'] else 0
@@ -278,14 +324,15 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None):
             f"🆕 <b>{'🔴' if s['lado'] < 0 else '🟢'} {lado} PREPARADA · {sim}</b> ({a['nombre']}) · <b>{tfl}</b> · {hora}",
             f"Divergencia {'bajista' if s['lado'] < 0 else 'alcista'} MACD · confirmaciones {s['conf']}/{s['maxconf']} "
             + ('⭐ filtro completo' if s['conf'] == s['maxconf'] else '(filtro incompleto: menos fiable)'),
+            *([nota] if nota else []),
             SEP,
             f"👉 Orden {'sell stop' if s['lado'] < 0 else 'buy stop'} en <code>{fmt(a, s['ent'])}</code> (23,6 %)",
             f"⛔ SL: <code>{fmt(a, s['sl'])}</code> (riesgo {fmt(a, s['R'])})",
             f"🎯 T1 38,2 %: <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
             f"🎯 T2 61,8 %: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R)",
             f"📦 Tamaño (1 % de {CAPITAL:.0f} $): {tamano(a, s['R'], s['ent'])}",
-            fondeo(a, s) + ('\n⚠️ 1 min fuera del plan de fondeo: en el backtest no es rentable (oro PF 0,03–0,73). '
-                            'Si la operas, es decisión tuya y va al 0,5 %.' if tfl == '1 min' else ''),
+            fondeo(a, s) + ('\n⚠️ 1 min fuera del plan de fondeo: en conjunto no es rentable (oro PF 0,03–0,73); '
+                            'mira la fiabilidad. Si la operas, es decisión tuya y va al 0,5 %.' if tfl == '1 min' else ''),
             *([f"⚠️ Stop muy corto: el spread (~{fmt(a, a['coste'])}) es el {a['coste'] / s['R']:.0%} del riesgo."]
               if a['coste'] > 0.25 * s['R'] else []),
             f"⏳ Cancelar si hace nuevo {'máximo' if s['lado'] < 0 else 'mínimo'} ({fmt(a, s['ext'])}) o tras 60 velas sin entrar.",
@@ -344,6 +391,16 @@ def main(prueba=False, informe=False, todas=True):
     toca_informe = informe or (madrid.hour >= 22 and estado.get('informe') != str(madrid.date()) and madrid.weekday() < 5)
     minuto = int(ahora.timestamp() // 60)
     base_oro = None
+    notas = estado.setdefault('notas', {})            # icono de fiabilidad de cada divergencia del oro (para el informe)
+    ctx = []
+
+    def contexto():                                   # tendencias v2.3 del oro, solo si hay aviso que puntuar
+        if not ctx:
+            try:
+                ctx.append(tendencia_oro())
+            except Exception as ex:
+                ctx.append(None); errores.append(f'contexto del oro no disponible ({ex})')
+        return ctx[0]
     for tf, (mins, _, _, tfl, previos, audit_tf) in TFS.items():
         # cada temporalidad se descarga justo despues de cerrar su vela (y siempre en la primera vuelta y el informe)
         if not (todas or toca_informe or minuto % mins == 0):
@@ -370,10 +427,12 @@ def main(prueba=False, informe=False, todas=True):
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
                 aa = a                                          # todas: solo filtro completo (minconf=3)
                 if previos or sim == 'XAUUSD':               # en el oro, aviso previo también en 1 min (pedido por Lucas)
-                    for clave, texto in vigilancia(di, a, mins):
+                    for clave, lado, R, texto in vigilancia(di, a, mins):
                         clave = f'{sim}|{pre}{clave}'
                         if clave not in enviados:
-                            salida.append((ahora, texto.replace('</b> · 5 min', f"</b> · {sim} ({a['nombre']}) · {tfl}", 1) + '\n' + audit))
+                            nota = '\n' + nota_oro(tf, lado, R, contexto())[1] if sim == 'XAUUSD' else ''
+                            salida.append((ahora, texto.replace('</b> · 5 min', f"</b> · {sim} ({a['nombre']}) · {tfl}", 1)
+                                           + nota + '\n' + audit))
                             enviados.add(clave)
                 for s in setups(di, aa, mins):
                     for t, evento, precio in s['ev']:
@@ -382,14 +441,18 @@ def main(prueba=False, informe=False, todas=True):
                             hoy.append((sim, s, evento, tfl))
                         if clave in enviados or ahora - t > VENTANA:
                             continue
-                        salida.append((t, mensaje(sim, a, s, evento, t, precio, tfl, audit)))
+                        nota = None
+                        if sim == 'XAUUSD' and evento == 'nueva':    # nota de fiabilidad (mezcla con la v2.3)
+                            ico, nota = nota_oro(tf, s['lado'], s['R'], contexto())
+                            notas[f"{pre}{s['id']}"] = ico
+                        salida.append((t, mensaje(sim, a, s, evento, t, precio, tfl, audit, nota)))
                         enviados.add(clave)
             except Exception as e:
                 errores.append(f'{sim} {tf}: {e}')
     salida.sort(key=lambda x: x[0])
     mensajes = [m for _, m in salida]
     if toca_informe:
-        mensajes.append(texto_informe(hoy, errores))
+        mensajes.append(texto_informe(hoy, errores, notas))
         estado['informe'] = str(madrid.date())
     if prueba:
         print('\n\n'.join(mensajes) or 'Sin avisos nuevos.')
@@ -399,29 +462,37 @@ def main(prueba=False, informe=False, todas=True):
         tg(m)
         print('ENVIADO', ahora.strftime('%Y-%m-%d %H:%M'), m.split(chr(10))[0][:120], flush=True)
     estado['enviados'] = sorted(enviados)[-3000:]
+    estado['notas'] = dict(sorted(notas.items(), key=lambda x: x[0][-12:])[-500:])
     os.makedirs(os.path.dirname(ESTADO), exist_ok=True)
     json.dump(estado, open(ESTADO, 'w'))
     if errores:
         print('Errores:', errores)
 
 
-def texto_informe(hoy, errores):
+def texto_informe(hoy, errores, notas=None):
     lineas = [f"📋 <b>INFORME DIVERGENCIAS · {dt.date.today():%d/%m}</b>", SEP]
-    finales = {}
+    finales, notas = {}, notas or {}
+    pre = {'1 min': '1m|', '5 min': '', '15 min': '15m|', '1 h': '1h|'}
     for sim, s, evento, tfl in hoy:
         finales[(sim, tfl, s['id'])] = (sim, s, evento, tfl)
     if not finales:
         lineas.append('Hoy no hubo divergencias que cumplan las reglas.')
-    total = 0.0
+    total, por_nota = 0.0, {}
     for sim, s, evento, tfl in sorted(finales.values(), key=lambda x: (x[3], x[0])):
+        ico = notas.get(f"{pre.get(tfl, '')}{s['id']}", '') if sim == 'XAUUSD' else ''
         r = {'t2': abs(s['t2'] - s['ent']) / s['R'], 'stop': -1.0}.get(evento)
         if r is not None:
             total += r
+            if ico:
+                n, x = por_nota.get(ico, (0, 0.0)); por_nota[ico] = (n + 1, x + r)
         nom = {'nueva': 'pendiente', 'activada': 'abierta', 't1': 'abierta (T1 tocado)', 't2': 'T2 ✅',
                'stop': 'stop ⛔', 'cancelada': 'cancelada', 'caducada': 'caducada'}[evento]
-        lineas.append(f"• {sim} {tfl} {'venta' if s['lado'] < 0 else 'compra'} {s['conf']}/{s['maxconf']}: {nom}")
+        lineas.append(f"• {sim} {tfl} {'venta' if s['lado'] < 0 else 'compra'} {s['conf']}/{s['maxconf']}{' ' + ico if ico else ''}: {nom}")
     if finales:
         lineas.append(f"\nResultado de las cerradas hoy (objetivo T2): {total:+.1f}R")
+    if por_nota:                                      # feedback de la mezcla: ¿las 🟢 rinden mejor que las 🔴?
+        lineas.append('Oro por fiabilidad: ' + ' · '.join(f"{k} {n} ops {x:+.1f}R" for k, (n, x) in
+                                                            sorted(por_nota.items(), key=lambda z: '🟢🟡🔴⚪'.find(z[0]))))
     lineas.append('\nRecuerda: solo QQQ (5 min, 3/3, sesión EE. UU.) pasó la auditoría, y con muestra pequeña; las señales con menos confirmaciones son menos fiables.')
     if errores:
         lineas.append('⚠️ ' + '; '.join(errores))
