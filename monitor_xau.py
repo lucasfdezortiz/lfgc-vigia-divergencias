@@ -305,7 +305,7 @@ def msg_plan(e, titulo='☀️ XAUUSD · PLAN DEL DÍA'):
     else:
         plan = f'👀 Solo {lado}. <b>Esperar a que el precio llegue a la zona</b> y entonces al cruce EMA 9/21 + MACD en 5 min.'
     l += [f"📋 <b>PLAN:</b> {plan}",
-          "⏰ Señales validadas 12:00 – 21:00 · Cierre obligatorio 22:00",
+          "⏰ Señales validadas {} – {} · Cierre obligatorio {}".format(*horas_es()),
           "⚠️ Fuera de ese horario también te aviso, marcado como «no validado»."]
     return '\n'.join(l)
 
@@ -322,7 +322,7 @@ def msg_preparado(e, fuera=False):
         "👉 <b>Abre el gráfico de 5 minutos.</b> La entrada llega con el cruce de la EMA 9 "
         f"{'por debajo' if lado == 'VENTA' else 'por encima'} de la EMA 21 y el MACD a favor. "
         "Te avisaré con la señal y los niveles exactos."])
-    return (AVISO_FUERA + texto) if fuera else texto
+    return (aviso_fuera() + texto) if fuera else texto
 
 
 CERCA = 0.12   # aviso de nivel clave cuando el retroceso llega al 21 % (12 puntos antes del 1/3)
@@ -471,7 +471,7 @@ def msg_senal(s, bal=CUENTA, fuera=False):
     l += [SEP,
           f"⚖️ Riesgo total: <b>{riesgo:.0f} $</b> ({riesgo / bal * 100:.1f} % de la cuenta)",
           "🔁 Cuando A toque TP → " + (f"mueve el SL de B a la entrada {px(s['entry'])} (break-even)." if s['useB'] else 'operación terminada.'),
-          "⏰ Cerrar todo a las 22:00 si sigue abierta.",
+          f"⏰ Cerrar todo a las {horas_es()[2]} si sigue abierta.",
           "⚠️ Confirma los niveles en tu MT5 (el precio del broker puede variar unos céntimos)."]
     rf = FONDEO_EXTRA if fuera else FONDEO_RIESGO
     fA, fB = lotes_fondeo(s, rf)
@@ -489,7 +489,7 @@ def msg_senal(s, bal=CUENTA, fuera=False):
         l += [f"⚖️ Si salta el SL: <b>−{frA:.0f} $</b> ({frA / FONDEO_CAP:.1%}) · si llega al TP: <b>+{fgA:.0f} $</b>"]
     l += [f"📏 Límites {FONDEO}: pérdida diaria máx. {FONDEO_CAP * 0.05:.0f} $ · total {FONDEO_CAP * 0.10:.0f} $. "
           + ("Tras 1 pérdida en el día, no operes más." if FONDEO_RIESGO >= 0.025 else "Tras 2 pérdidas en el día, no operes más.")]
-    return (AVISO_FUERA if fuera else '') + '\n'.join(l)
+    return (aviso_fuera() if fuera else '') + '\n'.join(l)
 
 
 # ---------------------------------------------------------------- Gestion al segundo
@@ -556,9 +556,17 @@ def en_horario(ts):
     return P['start'] <= ts.hour < P['end']
 
 
-AVISO_FUERA = ('⚠️ <b>FUERA DE HORARIO · NO VALIDADO</b>\n'
-               '<i>Se cumplen todas las reglas, pero fuera de 12:00–21:00. En el backtest estas entradas '
-               'no fueron rentables (PF 1,01 frente a 1,55). Decides tú; si entras, mismo plan de gestión.</i>\n')
+def horas_es():
+    """Ventana de entradas y cierre en hora de España (cambia con el horario de verano/invierno)."""
+    d = pd.Timestamp.now(tz='UTC').normalize()
+    return tuple(hora_es(d + pd.Timedelta(hours=P[k])) for k in ('start', 'end', 'close'))
+
+
+def aviso_fuera():
+    ini, fin, _ = horas_es()
+    return ('⚠️ <b>FUERA DE HORARIO · NO VALIDADO</b>\n'
+            f'<i>Se cumplen todas las reglas, pero fuera de {ini}–{fin}. En el backtest estas entradas '
+            'no fueron rentables (PF 1,01 frente a 1,55). Decides tú; si entras, mismo plan de gestión.</i>\n')
 
 
 def enviar_plan(win, e, titulo='☀️ XAUUSD · PLAN DEL DÍA'):
