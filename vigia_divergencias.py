@@ -8,6 +8,7 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - Confirmaciones: MACD (siempre) + divergencia RSI(14) + menos volumen (en divisas no hay volumen).
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
   - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). En 1 min, sin avisos previos.
+Oro, además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
 Cada aviso lleva el resultado de la auditoria de ese activo (2023-2026, con costes).
 
@@ -18,6 +19,7 @@ Telegram: variables TELEGRAM_TOKEN y TELEGRAM_CHAT, o config_telegram.json junto
 """
 import json, math, os, sys, time, urllib.request, urllib.parse, datetime as dt
 import numpy as np, pandas as pd
+import fvg_ict as FVG
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 ESTADO = os.environ.get('VIGIA_ESTADO') or os.path.join(AQUI, 'data', 'vigia_divergencias.json')
@@ -154,6 +156,38 @@ def nota_oro(tf, lado, R, ctx):
     ico = lambda x: '✅ a favor' if x > 0 else '❌ en contra' if x < 0 else '➖ neutral'
     return g[0], (f"🧭 <b>Fiabilidad {g}</b> · diario {ico(d)} · horario {ico(h)} · SL {R:.2f} $\n"
                   f"   Histórico 2025-26 de este tipo: {por}. Muestra pequeña: extra al 0,5 %, decides tú.")
+
+
+# Modelo ICT del oro (barrido + MSS + FVG, fvg_ict.py): resultado del backtest/fvg_ict_backtest.py (2023-2026, killzones,
+# objetivo 2R, coste 0,40 $/oz). Pierde incluso antes de costes: los avisos van marcados como no validados.
+NOTA_FVG = {
+    '5m': '🧭 <b>Fiabilidad 🔴 NO VALIDADA</b> · backtest oro 2023-26: 38 ops, acierto 29 %, PF 0,86 / 0,50 (−7,9R), '
+          'sin ventaja ni antes de costes. Recomendación: solo demo hasta tener muestra real.',
+    '15m': '🧭 <b>Fiabilidad 🔴 NO VALIDADA</b> · backtest oro 2023-26: 43 ops, acierto 33 %, PF 0,87 / 0,51 (−7,6R), '
+           'sin ventaja ni antes de costes. Recomendación: solo demo hasta tener muestra real.',
+}
+
+
+def fvg_oro(d, tf, mins, tfl, ahora, enviados, salida, hoy):
+    """Avisos del modelo FVG en el oro (5 y 15 min): barrido de liquidez (aviso previo) y la orden con su porqué."""
+    setups, barridos = FVG.escanear(d, mins, dict(ventanas='kz'))
+    for b in barridos:                                # solo los que pueden acabar en una orden dentro de una killzone
+        clave = f"XAUUSD|fvg{tf}|{b['id']}"
+        if clave in enviados or ahora - b['t'] > VENTANA:
+            continue
+        if FVG._ventana(b['t'], 'kz') or FVG._ventana(b['limite'], 'kz'):
+            salida.append((b['t'], FVG.mensaje(b, 'barrido', b['t'], tfl)))
+        enviados.add(clave)
+    for s in setups:
+        for t, evento, precio in s['ev']:
+            clave = f"XAUUSD|fvg{tf}|{s['id']}|{evento}"
+            if t.date() == ahora.date():
+                hoy.append(('XAUUSD', s, evento, f'FVG {tfl}'))
+            if clave in enviados or ahora - t > VENTANA:
+                continue
+            fon = fondeo(ACTIVOS['XAUUSD'], s).replace('T1', 'a 1R').replace('T2', 'TP') + ' · si decides operarla'
+            salida.append((t, FVG.mensaje(s, evento, t, tfl, fon, NOTA_FVG[tf])))
+            enviados.add(clave)
 
 
 def velas_5m(yahoo):
@@ -424,6 +458,11 @@ def main(prueba=False, informe=False, todas=True):
                             errores.append('oro contado no disponible: niveles del futuro GC')
                 di = indicadores(d)
                 audit = audit_tf or a['audit']
+                if sim == 'XAUUSD' and tf in ('5m', '15m'):     # modelo ICT: barrido + MSS + FVG
+                    try:
+                        fvg_oro(d, tf, mins, tfl, ahora, enviados, salida, hoy)
+                    except Exception as ex:
+                        errores.append(f'FVG {tf}: {ex}')
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
                 aa = a                                          # todas: solo filtro completo (minconf=3)
                 if previos or sim == 'XAUUSD':               # en el oro, aviso previo también en 1 min (pedido por Lucas)
@@ -477,19 +516,24 @@ def texto_informe(hoy, errores, notas=None):
         finales[(sim, tfl, s['id'])] = (sim, s, evento, tfl)
     if not finales:
         lineas.append('Hoy no hubo divergencias que cumplan las reglas.')
-    total, por_nota = 0.0, {}
+    total, por_nota, fvg = 0.0, {}, [0, 0.0]
     for sim, s, evento, tfl in sorted(finales.values(), key=lambda x: (x[3], x[0])):
         ico = notas.get(f"{pre.get(tfl, '')}{s['id']}", '') if sim == 'XAUUSD' else ''
-        r = {'t2': abs(s['t2'] - s['ent']) / s['R'], 'stop': -1.0}.get(evento)
+        r = {'t2': abs(s['t2'] - s['ent']) / s['R'], 'stop': -1.0, 'cierre': s.get('r_cierre')}.get(evento)
         if r is not None:
             total += r
-            if ico:
+            if tfl.startswith('FVG'):
+                fvg[0] += 1; fvg[1] += r
+            elif ico:
                 n, x = por_nota.get(ico, (0, 0.0)); por_nota[ico] = (n + 1, x + r)
         nom = {'nueva': 'pendiente', 'activada': 'abierta', 't1': 'abierta (T1 tocado)', 't2': 'T2 ✅',
-               'stop': 'stop ⛔', 'cancelada': 'cancelada', 'caducada': 'caducada'}[evento]
-        lineas.append(f"• {sim} {tfl} {'venta' if s['lado'] < 0 else 'compra'} {s['conf']}/{s['maxconf']}{' ' + ico if ico else ''}: {nom}")
+               'stop': 'stop ⛔', 'cancelada': 'cancelada', 'caducada': 'caducada', 'cierre': 'cerrada a las 16:00 NY'}[evento]
+        conf = f" {s['conf']}/{s['maxconf']}" if 'conf' in s else ' (barrido + MSS)'
+        lineas.append(f"• {sim} {tfl} {'venta' if s['lado'] < 0 else 'compra'}{conf}{' ' + ico if ico else ''}: {nom}")
     if finales:
         lineas.append(f"\nResultado de las cerradas hoy (objetivo T2): {total:+.1f}R")
+    if fvg[0]:
+        lineas.append(f"Modelo FVG (ICT, no validado): {fvg[0]} ops {fvg[1]:+.1f}R")
     if por_nota:                                      # feedback de la mezcla: ¿las 🟢 rinden mejor que las 🔴?
         lineas.append('Oro por fiabilidad: ' + ' · '.join(f"{k} {n} ops {x:+.1f}R" for k, (n, x) in
                                                             sorted(por_nota.items(), key=lambda z: '🟢🟡🔴⚪'.find(z[0]))))
