@@ -8,7 +8,8 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - Confirmaciones: MACD (siempre) + divergencia RSI(14) + menos volumen (en divisas no hay volumen).
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
   - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). En 1 min, sin avisos previos.
-Oro, además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué de cada orden.
+Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
+de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
 Cada aviso lleva el resultado de la auditoria de ese activo (2023-2026, con costes).
 
@@ -83,7 +84,7 @@ def velas(yahoo, tf='5m'):
     return d[d.index + pd.Timedelta(minutes=mins) <= ahora]       # solo velas cerradas
 
 
-DUKA = ('https://freeserv.dukascopy.com/2.0/?path=chart/json3&instrument=XAU%2FUSD&offer_side=B&interval={iv}'
+DUKA = ('https://freeserv.dukascopy.com/2.0/?path=chart/json3&instrument={ins}&offer_side=B&interval={iv}'
         '&splits=true&stocks=true&limit=1500&time_direction=P&timestamp={ts}&jsonp=_cb')
 DUKA_IV = {'1m': '1MIN', '5m': '5MIN', '15m': '15MIN', '1h': '1HOUR'}
 
@@ -91,9 +92,14 @@ DUKA_IV = {'1m': '1MIN', '5m': '5MIN', '15m': '15MIN', '1h': '1HOUR'}
 def velas_oro(tf):
     """Oro al contado en tiempo real (Dukascopy, la misma fuente que el backtest). Yahoo da el futuro GC con ~10 min
     de retraso, y en 1 min eso hacía llegar tarde los avisos."""
+    return velas_duka(tf, 'XAU%2FUSD')
+
+
+def velas_duka(tf, ins):
+    """Velas cerradas de Dukascopy en tiempo real: oro (XAU%2FUSD) o Nasdaq 100 (USATECH.IDX%2FUSD, el US100 de MT5)."""
     mins = TFS[tf][0]
     ahora = pd.Timestamp.now(tz='UTC')
-    req = urllib.request.Request(DUKA.format(iv=DUKA_IV[tf], ts=int(ahora.timestamp() * 1000)),
+    req = urllib.request.Request(DUKA.format(ins=ins, iv=DUKA_IV[tf], ts=int(ahora.timestamp() * 1000)),
                                  headers=dict(UA, Referer='https://freeserv.dukascopy.com/'))
     for i in range(3):
         try:
@@ -116,7 +122,7 @@ def tendencia_oro():
     """Contexto v2.3 del oro para la nota de fiabilidad: sesgo diario (cierre y EMA 20 frente a EMA 50 del ultimo dia
     cerrado) y tendencia horaria (EMA 20 frente a EMA 50 en 1 h). +1 alcista, -1 bajista, 0 neutral."""
     ahora = pd.Timestamp.now(tz='UTC')
-    req = urllib.request.Request(DUKA.format(iv='1DAY', ts=int(ahora.timestamp() * 1000)).replace('limit=1500', 'limit=300'),
+    req = urllib.request.Request(DUKA.format(ins='XAU%2FUSD', iv='1DAY', ts=int(ahora.timestamp() * 1000)).replace('limit=1500', 'limit=300'),
                                  headers=dict(UA, Referer='https://freeserv.dukascopy.com/'))
     t = urllib.request.urlopen(req, timeout=20).read().decode()
     d = pd.DataFrame(json.loads(t[t.index('(') + 1:t.rindex(')')]), columns=['t', 'Open', 'High', 'Low', 'Close', 'Vol'])
@@ -158,35 +164,52 @@ def nota_oro(tf, lado, R, ctx):
                   f"   Histórico 2025-26 de este tipo: {por}. Muestra pequeña: extra al 0,5 %, decides tú.")
 
 
-# Modelo ICT del oro (barrido + MSS + FVG, fvg_ict.py): resultado del backtest/fvg_ict_backtest.py (2023-2026, killzones,
-# objetivo 2R, coste 0,40 $/oz). Pierde incluso antes de costes: los avisos van marcados como no validados.
-NOTA_FVG = {
-    '5m': '🧭 <b>Fiabilidad 🔴 NO VALIDADA</b> · backtest oro 2023-26: 38 ops, acierto 29 %, PF 0,86 / 0,50 (−7,9R), '
-          'sin ventaja ni antes de costes. Recomendación: solo demo hasta tener muestra real.',
-    '15m': '🧭 <b>Fiabilidad 🔴 NO VALIDADA</b> · backtest oro 2023-26: 43 ops, acierto 33 %, PF 0,87 / 0,51 (−7,6R), '
-           'sin ventaja ni antes de costes. Recomendación: solo demo hasta tener muestra real.',
+# Modelo ICT (barrido + MSS + FVG, fvg_ict.py) en el oro y en el Nasdaq 100: resultado del backtest/fvg_ict_backtest.py
+# (2023-2026, killzones, objetivo 2R). No validado en ninguno de los dos: los avisos van marcados como tales.
+_NV = '🧭 <b>Fiabilidad 🔴 NO VALIDADA</b> · backtest {} 2023-26: {}. Recomendación: solo demo hasta tener muestra real.'
+FVG_ACT = {
+    'XAUUSD': dict(ins='XAU%2FUSD', buf=0.50, coste=0.40, ud='$', valor=100.0, apal=20, nota={
+        '5m': _NV.format('oro', '38 ops, acierto 29 %, PF 0,86 / 0,50 (−7,9R), sin ventaja ni antes de costes'),
+        '15m': _NV.format('oro', '43 ops, acierto 33 %, PF 0,87 / 0,51 (−7,6R), sin ventaja ni antes de costes')}),
+    # US100 de la FTMO: valor de 1 punto por lote SIN VERIFICAR (1 $); comprobarlo en MT5 → Especificación del contrato
+    'US100': dict(ins='USATECH.IDX%2FUSD', buf=3.0, coste=1.5, ud='pt', valor=1.0, apal=20, nota={
+        '5m': _NV.format('Nasdaq', '32 ops, acierto 38 %, PF 0,77 / 1,51 (−1,1R): pierde en 2023-24 y gana en 2025-26'),
+        '15m': _NV.format('Nasdaq', '51 ops, acierto 35 %, PF 0,83 / 0,84 (−5,5R)')}),
 }
 
 
-def fvg_oro(d, tf, mins, tfl, ahora, enviados, salida, hoy):
-    """Avisos del modelo FVG en el oro (5 y 15 min): barrido de liquidez (aviso previo) y la orden con su porqué."""
-    setups, barridos = FVG.escanear(d, mins, dict(ventanas='kz'))
+def fondeo_fvg(sim, s):
+    """Lotes de la FTMO al riesgo de las extras: riesgo $ / (stop × valor de 1 punto por lote), con tope de apalancamiento."""
+    c = FVG_ACT[sim]
+    lotes = math.floor(FONDEO_CAP * FONDEO_RIESGO / (s['R'] * c['valor']) * 100) / 100
+    tope = math.floor(FONDEO_CAP * c['apal'] / (c['valor'] * s['ent']) * 100) / 100
+    nota = ' (tope de apalancamiento)' if lotes > tope else ''
+    lotes = max(0.01, min(lotes, tope)); sl = lotes * c['valor'] * s['R']
+    aviso = ' · ⚠️ valor por punto sin verificar en MT5' if sim == 'US100' else ''
+    return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{nota} · SL <b>−{sl:.0f} $</b> · "
+            f"TP <b>+{sl * FVG.BASE['rr']:.0f} $</b> · si decides operarla{aviso}")
+
+
+def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
+    """Avisos del modelo FVG (5 y 15 min): barrido de liquidez (aviso previo) y la orden con su porqué."""
+    c = FVG_ACT[sim]
+    pre = 'fvg' if sim == 'XAUUSD' else 'fvg|'          # el oro conserva sus claves (no repetir avisos ya enviados)
+    setups, barridos = FVG.escanear(d, mins, dict(ventanas='kz', buf=c['buf']))
     for b in barridos:                                # solo los que pueden acabar en una orden dentro de una killzone
-        clave = f"XAUUSD|fvg{tf}|{b['id']}"
+        clave = f"{sim}|{pre}{tf}|{b['id']}"
         if clave in enviados or ahora - b['t'] > VENTANA:
             continue
         if FVG._ventana(b['t'], 'kz') or FVG._ventana(b['limite'], 'kz'):
-            salida.append((b['t'], FVG.mensaje(b, 'barrido', b['t'], tfl)))
+            salida.append((b['t'], FVG.mensaje(b, 'barrido', b['t'], tfl, sim=sim, coste=c['coste'], ud=c['ud'])))
         enviados.add(clave)
     for s in setups:
         for t, evento, precio in s['ev']:
-            clave = f"XAUUSD|fvg{tf}|{s['id']}|{evento}"
+            clave = f"{sim}|{pre}{tf}|{s['id']}|{evento}"
             if t.date() == ahora.date():
-                hoy.append(('XAUUSD', s, evento, f'FVG {tfl}'))
+                hoy.append((sim, s, evento, f'FVG {tfl}'))
             if clave in enviados or ahora - t > VENTANA:
                 continue
-            fon = fondeo(ACTIVOS['XAUUSD'], s).replace('T1', 'a 1R').replace('T2', 'TP') + ' · si decides operarla'
-            salida.append((t, FVG.mensaje(s, evento, t, tfl, fon, NOTA_FVG[tf])))
+            salida.append((t, FVG.mensaje(s, evento, t, tfl, fondeo_fvg(sim, s), c['nota'][tf], sim, c['coste'], c['ud'])))
             enviados.add(clave)
 
 
@@ -460,7 +483,7 @@ def main(prueba=False, informe=False, todas=True):
                 audit = audit_tf or a['audit']
                 if sim == 'XAUUSD' and tf in ('5m', '15m'):     # modelo ICT: barrido + MSS + FVG
                     try:
-                        fvg_oro(d, tf, mins, tfl, ahora, enviados, salida, hoy)
+                        fvg_avisos('XAUUSD', d, tf, mins, tfl, ahora, enviados, salida, hoy)
                     except Exception as ex:
                         errores.append(f'FVG {tf}: {ex}')
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
@@ -488,6 +511,15 @@ def main(prueba=False, informe=False, todas=True):
                         enviados.add(clave)
             except Exception as e:
                 errores.append(f'{sim} {tf}: {e}')
+    for tf in ('5m', '15m'):                          # modelo FVG en el Nasdaq 100 (US100 de MT5, Dukascopy en tiempo real)
+        mins, tfl = TFS[tf][0], TFS[tf][3]
+        if todas or toca_informe or minuto % mins == 0:
+            try:
+                fvg_avisos('US100', velas_duka(tf, FVG_ACT['US100']['ins']), tf, mins, tfl, ahora, enviados, salida, hoy)
+            except ValueError:
+                pass                                  # pausa diaria del índice: sin velas nuevas
+            except Exception as ex:
+                errores.append(f'FVG US100 {tf}: {ex}')
     salida.sort(key=lambda x: x[0])
     mensajes = [m for _, m in salida]
     if toca_informe:
@@ -522,7 +554,7 @@ def texto_informe(hoy, errores, notas=None):
         r = {'t2': abs(s['t2'] - s['ent']) / s['R'], 'stop': -1.0, 'cierre': s.get('r_cierre')}.get(evento)
         if r is not None:
             total += r
-            if tfl.startswith('FVG'):
+            if tfl.startswith('FVG'):                 # oro y Nasdaq juntos
                 fvg[0] += 1; fvg[1] += r
             elif ico:
                 n, x = por_nota.get(ico, (0, 0.0)); por_nota[ico] = (n + 1, x + r)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Modelo ICT del oro: Liquidity Sweep + Market Structure Shift (MSS) + Fair Value Gap (FVG).
+"""Modelo ICT del oro y del Nasdaq 100: Liquidity Sweep + Market Structure Shift (MSS) + Fair Value Gap (FVG).
 
 Reglas objetivas a partir del PDF «Significado de FVG en trading» (conversación de Lucas con ChatGPT, 2026-11-04).
 Las usan a la vez el backtest (backtest/fvg_ict_backtest.py) y el vigía en la nube (vigia_divergencias.py), así que
@@ -198,12 +198,12 @@ def _f(x):
     return f"{x:.2f}"
 
 
-def mensaje(s, evento, t, tfl, fondeo_txt='', nota=''):
-    """Texto de Telegram para cada evento del modelo FVG, con el porqué de la operación."""
+def mensaje(s, evento, t, tfl, fondeo_txt='', nota='', sim='XAUUSD', coste=0.40, ud='$'):
+    """Texto de Telegram para cada evento del modelo FVG, con el porqué de la operación (oro o Nasdaq: sim, coste, unidad)."""
     compra = s['lado'] > 0
     lado = 'COMPRA' if compra else 'VENTA'
     hora = t.tz_convert('Europe/Madrid').strftime('%H:%M')
-    tit = f"· XAUUSD · FVG {tfl}"
+    tit = f"· {sim} · FVG {tfl}"
     if evento == 'barrido':
         limite = s['limite'].tz_convert('Europe/Madrid').strftime('%H:%M')
         return '\n'.join([
@@ -216,7 +216,7 @@ def mensaje(s, evento, t, tfl, fondeo_txt='', nota=''):
     if evento == 'nueva':
         pd_ = 'descuento' if compra else 'premium'
         por_que = [f"✅ Barrido del {s['nombre']} ({_f(s['nivel'])}) y vuelta: liquidez recogida.",
-                   f"✅ MSS: cierre {'sobre' if compra else 'bajo'} {_f(s['ref'])} con desplazamiento (FVG de {_f(s['fvg_hi'] - s['fvg_lo'])} $).",
+                   f"✅ MSS: cierre {'sobre' if compra else 'bajo'} {_f(s['ref'])} con desplazamiento (FVG de {_f(s['fvg_hi'] - s['fvg_lo'])} {ud}).",
                    f"✅ Entrada en el 50 % del FVG, en {pd_} del impulso; el stop va detrás del barrido."]
         contra = []
         if s['h1'] * s['lado'] < 0:
@@ -224,8 +224,8 @@ def mensaje(s, evento, t, tfl, fondeo_txt='', nota=''):
         else:
             por_que.append('✅ A favor de la tendencia de 1 h.')
         por_que.append(f"✅ Dentro de la killzone «{s['ventana']}»." if s['ventana'] != 'todo el día' else '')
-        if s['R'] < 2:
-            contra.append(f"⚠️ Stop corto ({_f(s['R'])} $): el spread (~0,40 $) es el {0.40 / s['R']:.0%} del riesgo.")
+        if coste > 0.2 * s['R']:
+            contra.append(f"⚠️ Stop corto ({_f(s['R'])} {ud}): el coste (~{coste:g} {ud}) es el {coste / s['R']:.0%} del riesgo.")
         contra.append('⚠️ Si hay dato macro (IPC, empleo, Fed) en los próximos 30 min, mejor no entrar.')
         return '\n'.join([
             f"🆕 <b>{'🟢' if compra else '🔴'} {lado} FVG PREPARADA {tit}</b> · {hora}",
@@ -233,7 +233,7 @@ def mensaje(s, evento, t, tfl, fondeo_txt='', nota=''):
             '━━━━━━━━━━━━━━━━━━',
             f"👉 Orden <b>{'buy limit' if compra else 'sell limit'}</b> en <code>{_f(s['ent'])}</code> "
             f"(FVG <code>{_f(s['fvg_lo'])}</code> – <code>{_f(s['fvg_hi'])}</code>)",
-            f"⛔ SL: <code>{_f(s['sl'])}</code> (riesgo {_f(s['R'])} $, detrás del barrido)",
+            f"⛔ SL: <code>{_f(s['sl'])}</code> (riesgo {_f(s['R'])} {ud}, detrás del barrido)",
             f"🎯 TP 2R: <code>{_f(s['t2'])}</code>",
             *([fondeo_txt] if fondeo_txt else []),
             f"⏳ Cancelar si llega a <code>{_f(s['t2'])}</code> sin entrar o tras {BASE['W']} velas.",
