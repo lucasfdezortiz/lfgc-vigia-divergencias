@@ -7,7 +7,8 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - Orden stop 1 tick tras el 23,6 % del tramo local; SL 1 tick tras el extremo; T1 38,2 %; T2 61,8 %.
   - Confirmaciones: MACD (siempre) + divergencia RSI(14) + menos volumen (en divisas no hay volumen).
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
-  - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). En 1 min, sin avisos previos.
+  - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). Sin avisos de «formándose»
+    desde el 2026-11-04: solo la orden preparada y su seguimiento.
 Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
 de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
@@ -31,7 +32,8 @@ FONDEO, FONDEO_CAP = 'FTMO 10K', 10000.0                          # cuenta de fo
 FONDEO_RIESGO = float(os.environ.get('VIGIA_FONDEO_RIESGO', 0.015))   # 0,5 % en la nube: operación extra no validada
 N, ESPERA, MIN_SEP, MAX_SEP = 3, 60, 5, 120
 F_ENT, F_T1, F_T2 = 0.236, 0.382, 0.618
-VENTANA = pd.Timedelta(hours=3)        # no se avisa de eventos mas antiguos (primer arranque, retrasos)
+VENTANA = pd.Timedelta(hours=3)
+AVISO_FORMACION = False                # 2026-11-04, Lucas: divergencias solo al preparar la orden y su seguimiento, sin «formándose»        # no se avisa de eventos mas antiguos (primer arranque, retrasos)
 # temporalidad: (minutos, intervalo y rango de Yahoo, nombre, avisos previos, auditoria 2023-2026 de esa temporalidad)
 TFS = {
     '1m':  (1, '1m', '2d', '1 min', False,
@@ -171,7 +173,7 @@ FVG_ACT = {
     'XAUUSD': dict(ins='XAU%2FUSD', buf=0.50, coste=0.40, ud='$', valor=100.0, apal=20, nota={
         '5m': _NV.format('oro', '38 ops, acierto 29 %, PF 0,86 / 0,50 (−7,9R), sin ventaja ni antes de costes'),
         '15m': _NV.format('oro', '43 ops, acierto 33 %, PF 0,87 / 0,51 (−7,6R), sin ventaja ni antes de costes')}),
-    # US100 de la FTMO: valor de 1 punto por lote SIN VERIFICAR (1 $); comprobarlo en MT5 → Especificación del contrato
+    # US100.cash de la FTMO: tamaño del contrato 1 → 1 $ por punto y lote (especificación de MT5 de Lucas, 2026-11-04)
     'US100': dict(ins='USATECH.IDX%2FUSD', buf=3.0, coste=1.5, ud='pt', valor=1.0, apal=20, nota={
         '5m': _NV.format('Nasdaq', '32 ops, acierto 38 %, PF 0,77 / 1,51 (−1,1R): pierde en 2023-24 y gana en 2025-26'),
         '15m': _NV.format('Nasdaq', '51 ops, acierto 35 %, PF 0,83 / 0,84 (−5,5R)')}),
@@ -185,9 +187,8 @@ def fondeo_fvg(sim, s):
     tope = math.floor(FONDEO_CAP * c['apal'] / (c['valor'] * s['ent']) * 100) / 100
     nota = ' (tope de apalancamiento)' if lotes > tope else ''
     lotes = max(0.01, min(lotes, tope)); sl = lotes * c['valor'] * s['R']
-    aviso = ' · ⚠️ valor por punto sin verificar en MT5' if sim == 'US100' else ''
-    return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{nota} · SL <b>−{sl:.0f} $</b> · "
-            f"TP <b>+{sl * FVG.BASE['rr']:.0f} $</b> · si decides operarla{aviso}")
+    return (f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f}</b>{nota} → SL <b>−{sl:.0f} $</b> · "
+            f"TP <b>+{sl * FVG.BASE['rr']:.0f} $</b>")
 
 
 def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
@@ -349,10 +350,11 @@ def tamano(a, R, precio):
     return f"{k / 100:.2f} lotes → riesgo ≈ {k * usd_ud:.0f} $ ({k * usd_ud / CAPITAL:.1%}){tope}"
 
 
-def fondeo(a, s):
-    """Lotes y dolares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades)."""
+def fondeo_calc(a, s):
+    """Lotes y dólares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades).
+    Devuelve (lotes, SL $, T1 $, T2 $, tope) o None si el activo no se opera con estos precios (QQQ)."""
     if a['tipo'] == 'accion':
-        return "🏦 En la cuenta de fondeo se opera el US100 (otros precios): usa el % de riesgo, no estos niveles."
+        return None
     if a['tipo'] == 'oro':
         usd_lote, nocional = s['R'] * 100, 100 * s['ent']
     else:
@@ -364,8 +366,16 @@ def fondeo(a, s):
     lotes = max(0.01, min(lotes, tope))
     sl = lotes * usd_lote
     g = lambda x: sl * abs(x - s['ent']) / s['R']
-    return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{nota} · SL <b>−{sl:.0f} $</b> · "
-            f"T1 <b>+{g(s['t1']):.0f} $</b> · T2 <b>+{g(s['t2']):.0f} $</b>")
+    return lotes, sl, g(s['t1']), g(s['t2']), bool(nota)
+
+
+def fondeo(a, s):
+    f = fondeo_calc(a, s)
+    if f is None:
+        return "🏦 En la cuenta de fondeo se opera el US100 (otros precios): usa el % de riesgo, no estos niveles."
+    lotes, sl, t1, t2, tope = f
+    return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{' (tope de apalancamiento)' if tope else ''} · "
+            f"SL <b>−{sl:.0f} $</b> · T1 <b>+{t1:.0f} $</b> · T2 <b>+{t2:.0f} $</b>")
 
 
 def fmt(a, x):
@@ -377,23 +387,36 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None, nota=None):
     hora = t.tz_convert('Europe/Madrid').strftime('%H:%M')
     rr = lambda x: abs(x - s['ent']) / s['R'] if s['R'] else 0
     if evento == 'nueva':
+        compra = s['lado'] > 0
+        f = fondeo_calc(a, s)
+        u = ' $' if a['tipo'] == 'oro' else ''
+        if f is None:
+            lotes = ['Lotes: en la FTMO se opera el US100 (otros precios); usa estos niveles solo como referencia.']
+        else:
+            lt, sl_usd, t1_usd, t2_usd, tope = f
+            lotes = [f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lt:.2f}</b>{' (tope de apalancamiento)' if tope else ''} → "
+                     f"SL <b>−{sl_usd:.0f} $</b> · TP <b>+{t2_usd:.0f} $</b>"]
+        avisos = []
+        if tfl == '1 min':
+            avisos.append('1 min va fuera del plan de fondeo: en conjunto no es rentable; mira la fiabilidad.')
+        if a['coste'] > 0.25 * s['R']:
+            avisos.append(f"Stop muy corto: el spread (~{fmt(a, a['coste'])}{u}) es el {a['coste'] / s['R']:.0%} del riesgo.")
         return '\n'.join([
-            f"🆕 <b>{'🔴' if s['lado'] < 0 else '🟢'} {lado} PREPARADA · {sim}</b> ({a['nombre']}) · <b>{tfl}</b> · {hora}",
-            f"Divergencia {'bajista' if s['lado'] < 0 else 'alcista'} MACD · confirmaciones {s['conf']}/{s['maxconf']} "
-            + ('⭐ filtro completo' if s['conf'] == s['maxconf'] else '(filtro incompleto: menos fiable)'),
+            f"🆕 {'🟢' if compra else '🔴'} <b>{lado} PREPARADA · {sim} · {tfl}</b> · {hora}",
+            f"Divergencia {'alcista' if compra else 'bajista'} (Trullás) · confirmaciones {s['conf']}/{s['maxconf']}"
+            + (' ⭐' if s['conf'] == s['maxconf'] else ' (filtro incompleto)'),
             *([nota] if nota else []),
             SEP,
-            f"👉 Orden {'sell stop' if s['lado'] < 0 else 'buy stop'} en <code>{fmt(a, s['ent'])}</code> (23,6 %)",
-            f"⛔ SL: <code>{fmt(a, s['sl'])}</code> (riesgo {fmt(a, s['R'])})",
-            f"🎯 T1 38,2 %: <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
-            f"🎯 T2 61,8 %: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R)",
-            f"📦 Tamaño (1 % de {CAPITAL:.0f} $): {tamano(a, s['R'], s['ent'])}",
-            fondeo(a, s) + ('\n⚠️ 1 min fuera del plan de fondeo: en conjunto no es rentable (oro PF 0,03–0,73); '
-                            'mira la fiabilidad. Si la operas, es decisión tuya y va al 0,5 %.' if tfl == '1 min' else ''),
-            *([f"⚠️ Stop muy corto: el spread (~{fmt(a, a['coste'])}) es el {a['coste'] / s['R']:.0%} del riesgo."]
-              if a['coste'] > 0.25 * s['R'] else []),
-            f"⏳ Cancelar si hace nuevo {'máximo' if s['lado'] < 0 else 'mínimo'} ({fmt(a, s['ext'])}) o tras 60 velas sin entrar.",
-            SEP, audit or a['audit']])
+            '📋 <b>ORDEN PARA MT5</b>',
+            f"Tipo: <b>{'buy stop' if compra else 'sell stop'}</b>",
+            f"Entrada: <code>{fmt(a, s['ent'])}</code>",
+            f"SL: <code>{fmt(a, s['sl'])}</code> ({fmt(a, s['R'])}{u})",
+            f"TP: <code>{fmt(a, s['t2'])}</code> ({rr(s['t2']):.1f}R) · parcial opcional en <code>{fmt(a, s['t1'])}</code> ({rr(s['t1']):.1f}R)",
+            *lotes,
+            SEP,
+            *[f"⚠️ {x}" for x in avisos],
+            f"⏳ Cancela la orden si hace nuevo {'mínimo' if compra else 'máximo'} (<code>{fmt(a, s['ext'])}</code>) antes de entrar o tras 60 velas.",
+            f"<i>{audit or a['audit']}</i>"])
     textos = {
         'activada': f"✅ <b>{lado} ACTIVADA · {sim}</b> en <code>{fmt(a, s['ent'])}</code> ({hora}). SL <code>{fmt(a, s['sl'])}</code> · T1 <code>{fmt(a, s['t1'])}</code> · T2 <code>{fmt(a, s['t2'])}</code>",
         't1': f"🎯 <b>T1 · {sim}</b> {lado.lower()}: tocado <code>{fmt(a, s['t1'])}</code> (+{rr(s['t1']):.1f}R) a las {hora}.",
@@ -488,7 +511,7 @@ def main(prueba=False, informe=False, todas=True):
                         errores.append(f'FVG {tf}: {ex}')
                 pre = '' if tf == '5m' else f'{tf}|'          # 5 min conserva las claves antiguas (no repetir avisos)
                 aa = a                                          # todas: solo filtro completo (minconf=3)
-                if previos or sim == 'XAUUSD':               # en el oro, aviso previo también en 1 min (pedido por Lucas)
+                if AVISO_FORMACION and (previos or sim == 'XAUUSD'):   # aviso previo «formándose» (desactivado)
                     for clave, lado, R, texto in vigilancia(di, a, mins):
                         clave = f'{sim}|{pre}{clave}'
                         if clave not in enviados:

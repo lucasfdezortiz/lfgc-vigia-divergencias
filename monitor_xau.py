@@ -415,34 +415,58 @@ def avisos_nivel(e, operadas=0, prov=None):
 CONTROLES = [(11, 0), (13, 0), (15, 35), (18, 0)]   # hora de España: apertura de la ventana, mediodía, tras abrir NY, tarde
 
 
+def bloque_fvg():
+    """Sección del modelo FVG (barrido + MSS + FVG) para el punto de control: oro y Nasdaq 100 en 5 min."""
+    try:
+        import fvg_ict as FVG, vigia_divergencias as VG
+    except Exception as ex:
+        return [f"⚠️ Modelo FVG no disponible ({ex})"]
+    l = []
+    kz = FVG.proxima_killzone(pd.Timestamp.now(tz='UTC'))
+    if kz:
+        nom, ini, fin, dentro = kz
+        l.append(f"🕐 {'Dentro de la killzone <b>' + nom + '</b> hasta las ' + fin if dentro else 'Fuera de killzone · próxima: <b>' + nom + '</b> de ' + ini + ' a ' + fin}")
+    for sim in ('XAUUSD', 'US100'):
+        try:
+            c = VG.FVG_ACT[sim]
+            e = FVG.estado(VG.velas_duka('5m', c['ins']), 5, dict(ventanas='kz', buf=c['buf']))
+            l += FVG.texto_control(sim, e, '5 min', c['ud'])
+        except Exception:
+            l.append(f"👉 <b>{sim}</b>: sin datos ahora mismo (pausa del mercado).")
+    return l
+
+
 def msg_control(e, prov=None, operadas=0):
-    """Foto del oro a horas fijas, todos los días, para que Lucas valore por sí mismo si hay oportunidad."""
+    """Foto a horas fijas, todos los días, de las tres estrategias, para que Lucas valore por sí mismo si hay oportunidad."""
     d = e['bias']; p = e if e['pauta'] and e['retr'] <= P['fmax'] else prov
-    a_favor = lambda x: '✅ a favor' if d and x * d > 0 else '❌ en contra' if d else '—'
-    l = [f"📊 <b>PUNTO DE CONTROL · XAUUSD · {hora_es(e['t'])}</b>",
-         f"💰 Precio {px(e['precio'])}",
+    a_favor = lambda x: '✅' if d and x * d > 0 else '❌' if d else '—'
+    l = [f"📊 <b>PUNTO DE CONTROL · {hora_es(e['t'])}</b>",
+         f"💰 XAUUSD {px(e['precio'])}",
          SEP,
-         f"1️⃣ Diario {ico(d)} · 2️⃣ Horario {ico(e['h1'])} · ADX {e['adx']:.1f} {'✅' if e['adx_ok'] else '⚠️ (&lt; 20)'}",
-         f"📏 Máx. ayer {px(e['pdh'])} · Mín. ayer {px(e['pdl'])}",
-         f"📏 Resistencia H1 {px(e['res'])} · Soporte H1 {px(e['sop'])}",
-         f"⏱ 5 min: EMA 9 {'&gt;' if e['ema_f'] > e['ema_s'] else '&lt;'} EMA 21 ({a_favor(e['ema_f'] - e['ema_s'])}) · "
-         f"MACD {e['macd_hist']:+.2f} ({a_favor(e['macd_hist'])})"]
+         "1️⃣ <b>v2.3 · oro</b> · la única al 3 %",
+         f"Diario {ico(d)} · Horario {ico(e['h1'])} · ADX {e['adx']:.1f} {'✅' if e['adx_ok'] else '⚠️ (&lt; 20)'}",
+         f"5 min: EMA 9 {'&gt;' if e['ema_f'] > e['ema_s'] else '&lt;'} EMA 21 {a_favor(e['ema_f'] - e['ema_s'])} · "
+         f"MACD {e['macd_hist']:+.2f} {a_favor(e['macd_hist'])}",
+         f"📏 Ayer {px(e['pdh'])} / {px(e['pdl'])} · H1 resistencia {px(e['res'])} / soporte {px(e['sop'])}"]
     if d == 0:
-        l += [SEP, '⛔ Diario neutral: hoy la v2.3 no opera.']
+        l += ['⛔ Diario neutral: hoy la v2.3 no opera.']
     elif e['h1'] != d:
-        l += [SEP, '⏸ Diario y horario no coinciden: la v2.3 espera a que se alineen.']
+        l += ['⏸ Diario y horario no coinciden: no opera. Falta que el horario se ponga '
+              f"{'alcista' if d > 0 else 'bajista'} como el diario."]
     elif p is None:
         if e['pauta']:
-            l += [SEP, f"⛔ La pauta {px(e['ori'])} ➜ {px(e['ext'])} está anulada (retroceso {e['retr']*100:.0f} %). "
-                       f"Esperar un nuevo {'mínimo' if d < 0 else 'máximo'} en 1 hora."]
+            l += [f"⛔ La pauta {px(e['ori'])} ➜ {px(e['ext'])} está anulada (retroceso {e['retr']*100:.0f} %). "
+                  f"Falta un nuevo {'mínimo' if d < 0 else 'máximo'} en 1 hora."]
         else:
-            l += [SEP, '⏸ Aún no hay impulso válido en 1 hora: esperar.']
+            l += ['⏸ Aún no hay impulso válido en 1 hora: esperar.']
     else:
         estado = ('🟠 PREPARADO (el precio ya tocó la zona): vigilar el gatillo en 5 min' if e['preparado'] else
                   'provisional (extremo sin confirmar)' if p is prov else 'oficial')
         l += [f"📐 Pauta {estado}", *_cuerpo_nivel(e, p, operadas)]
-    l += [SEP, "🔎 Divergencias (Trullás, 1, 5 y 15 min y 1 h): las avisa el vigía aparte.",
-          "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; lo demás es para estar atento.</i>"]
+    l += [SEP, "2️⃣ <b>FVG ICT · oro y Nasdaq</b> · extra al 0,5 % · no validado", *bloque_fvg(),
+          SEP, "3️⃣ <b>Divergencias (Trullás)</b> · extra al 0,5 %",
+          "Te llegan solo cuando hay una orden que preparar (🆕), con su nota de fiabilidad 🟢 / 🟡 / 🔴.",
+          "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; las demás son extras al 0,5 % y decides tú.</i>"]
     return '\n'.join(l)
 
 

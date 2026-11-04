@@ -182,6 +182,73 @@ def escanear(d, mins=5, P=None, tick=0.01):
     return setups, barridos
 
 
+def estado(d, mins=5, P=None):
+    """Foto del modelo para el punto de control: liquidez del día (intacta o barrida), barridos que esperan el MSS y la
+    orden en curso. Mismas reglas que escanear()."""
+    P = dict(BASE, **(P or {}))
+    setups, barridos = escanear(d, mins, P)
+    niv, dia, hny = _niveles(d)
+    H, L, C = d.High.values, d.Low.values, d.Close.values
+    j = len(d) - 1
+    ahora = d.index[j] + pd.Timedelta(minutes=mins)
+    hoy = np.nonzero(dia == dia[j])[0]
+    liquidez = []
+    for nom, (p, lado) in niv[j].items():
+        desde = [k for k in hoy if ('Asia' not in nom or hny[k] < 17) and ('Londres' not in nom or 5 <= hny[k] < 17)]
+        barrido = any((L[k] < p) if lado > 0 else (H[k] > p) for k in desde)
+        liquidez.append((nom, p, barrido))
+    esperando = []
+    for b in barridos:
+        if b['limite'] <= ahora:
+            continue
+        sig = C[b['i'] + 1:]
+        anulado = ((sig < b['nivel']) if b['lado'] > 0 else (sig > b['nivel'])).any()
+        mss = ((sig > b['ref']) if b['lado'] > 0 else (sig < b['ref'])).any()
+        if not anulado and not mss:
+            esperando.append(b)
+    op = setups[-1] if setups and setups[-1]['estado'] in ('pendiente', 'activada') else None
+    n_hoy = sum(1 for x in setups if dia[x['j0']] == dia[j] and any(e == 'activada' for _, e, _ in x['ev']))
+    return dict(ahora=ahora, liquidez=liquidez, esperando=esperando, op=op, n_hoy=n_hoy, precio=C[j])
+
+
+def proxima_killzone(t):
+    """(nombre, inicio, fin) de la killzone en curso o de la siguiente, en hora de Madrid."""
+    ny = t.tz_convert(NY)
+    for dd in range(0, 4):
+        base = (ny + pd.Timedelta(days=dd)).normalize()
+        for nom, (a, b) in KILLZONES.items():
+            ini, fin_ = base + pd.Timedelta(hours=a), base + pd.Timedelta(hours=b)
+            if fin_ > ny and ini.weekday() < 5:
+                m = lambda x: x.tz_convert('Europe/Madrid').strftime('%H:%M')
+                return nom, m(ini), m(fin_), ini <= ny
+    return None
+
+
+def texto_control(sim, e, mins_tfl='5 min', ud='$'):
+    """Líneas del punto de control para un activo: qué está pasando y qué tiene que cumplirse para entrar."""
+    l = []
+    op = e['op']
+    if op is not None:
+        compra = op['lado'] > 0
+        l.append(f"👉 <b>{sim}</b>: orden {'buy' if compra else 'sell'} limit <code>{_f(op['ent'])}</code> "
+                 f"{'ABIERTA' if op['estado'] == 'activada' else 'pendiente'} · SL <code>{_f(op['sl'])}</code> · TP <code>{_f(op['t2'])}</code>")
+    elif e['esperando']:
+        b = e['esperando'][-1]; compra = b['lado'] > 0
+        lim = b['limite'].tz_convert('Europe/Madrid').strftime('%H:%M')
+        l.append(f"👉 <b>{sim}</b>: barrido del {b['nombre']} ({_f(b['nivel'])}) → posible <b>{'COMPRA' if compra else 'VENTA'}</b>. "
+                 f"Falta MSS: cierre de {mins_tfl} {'sobre' if compra else 'bajo'} <code>{_f(b['ref'])}</code> antes de las {lim}, con FVG.")
+    else:
+        l.append(f"👉 <b>{sim}</b> ({_f(e['precio'])}): esperando un barrido. Se activa si el precio perfora un nivel intacto "
+                 f"con la mecha y cierra de vuelta dentro de una killzone.")
+    intactos = [f"{n} <code>{_f(p)}</code>" for n, p, b in e['liquidez'] if not b]
+    barridos = [n for n, p, b in e['liquidez'] if b]
+    if intactos:
+        l.append('   💧 Intactos: ' + ' · '.join(intactos))
+    if barridos:
+        l.append('   ✖️ Ya barridos hoy: ' + ', '.join(barridos))
+    return l
+
+
 def resultado(s, coste=0.40):
     """R neto de un setup cerrado (None si no llegó a entrar o sigue abierto)."""
     if s['estado'] == 'stop':
@@ -203,42 +270,46 @@ def mensaje(s, evento, t, tfl, fondeo_txt='', nota='', sim='XAUUSD', coste=0.40,
     compra = s['lado'] > 0
     lado = 'COMPRA' if compra else 'VENTA'
     hora = t.tz_convert('Europe/Madrid').strftime('%H:%M')
-    tit = f"· {sim} · FVG {tfl}"
+    tit = f"· {sim} · {tfl}"
     if evento == 'barrido':
         limite = s['limite'].tz_convert('Europe/Madrid').strftime('%H:%M')
         return '\n'.join([
-            f"👀 <b>BARRIDO DE LIQUIDEZ {tit}</b> · {hora}",
-            f"El precio ha perforado el <b>{s['nombre']}</b> (<code>{_f(s['nivel'])}</code>) hasta <code>{_f(s['ext'])}</code> "
-            f"y ha cerrado de nuevo {'por encima' if compra else 'por debajo'}: posible trampa a los {'vendedores' if compra else 'compradores'}.",
-            f"Para una <b>{lado}</b> falta el <b>MSS</b>: cierre de {tfl} {'por encima' if compra else 'por debajo'} de "
-            f"<code>{_f(s['ref'])}</code> (último {'máximo' if compra else 'mínimo'}) antes de las {limite}, con un FVG en el impulso.",
+            f"👀 <b>BARRIDO DE LIQUIDEZ (modelo FVG) {tit}</b> · {hora}",
+            f"Ha perforado el <b>{s['nombre']}</b> (<code>{_f(s['nivel'])}</code> → <code>{_f(s['ext'])}</code>) y ha cerrado "
+            f"{'por encima' if compra else 'por debajo'}: posible trampa a los {'vendedores' if compra else 'compradores'}.",
+            f"Posible <b>{lado}</b>. Para que haya orden falta:",
+            f"1️⃣ MSS: cierre de {tfl} {'por encima' if compra else 'por debajo'} de <code>{_f(s['ref'])}</code> antes de las {limite}",
+            '2️⃣ que ese impulso deje un FVG (hueco de 3 velas)',
             f"Se anula si una vela cierra {'por debajo' if compra else 'por encima'} de <code>{_f(s['nivel'])}</code>. Aún no hay orden."])
     if evento == 'nueva':
         pd_ = 'descuento' if compra else 'premium'
-        por_que = [f"✅ Barrido del {s['nombre']} ({_f(s['nivel'])}) y vuelta: liquidez recogida.",
-                   f"✅ MSS: cierre {'sobre' if compra else 'bajo'} {_f(s['ref'])} con desplazamiento (FVG de {_f(s['fvg_hi'] - s['fvg_lo'])} {ud}).",
-                   f"✅ Entrada en el 50 % del FVG, en {pd_} del impulso; el stop va detrás del barrido."]
+        por_que = [f"Barrido del {s['nombre']} ({_f(s['nivel'])}) y vuelta: liquidez recogida.",
+                   f"MSS: cierre {'sobre' if compra else 'bajo'} {_f(s['ref'])} con desplazamiento (FVG de {_f(s['fvg_hi'] - s['fvg_lo'])} {ud}).",
+                   f"Entrada en el 50 % del FVG, en {pd_} del impulso; el stop va detrás del barrido."]
         contra = []
         if s['h1'] * s['lado'] < 0:
-            contra.append('⚠️ Va contra la tendencia de 1 h (EMA 20 frente a EMA 50).')
+            contra.append('Va contra la tendencia de 1 h (EMA 20 frente a EMA 50).')
         else:
-            por_que.append('✅ A favor de la tendencia de 1 h.')
-        por_que.append(f"✅ Dentro de la killzone «{s['ventana']}»." if s['ventana'] != 'todo el día' else '')
+            por_que.append('A favor de la tendencia de 1 h.')
+        if s['ventana'] != 'todo el día':
+            por_que.append(f"Dentro de la killzone «{s['ventana']}».")
         if coste > 0.2 * s['R']:
-            contra.append(f"⚠️ Stop corto ({_f(s['R'])} {ud}): el coste (~{coste:g} {ud}) es el {coste / s['R']:.0%} del riesgo.")
-        contra.append('⚠️ Si hay dato macro (IPC, empleo, Fed) en los próximos 30 min, mejor no entrar.')
+            contra.append(f"Stop corto ({_f(s['R'])} {ud}): el coste (~{coste:g} {ud}) es el {coste / s['R']:.0%} del riesgo.")
+        contra.append('Si hay dato macro (IPC, empleo, Fed) en los próximos 30 min, mejor no entrar.')
         return '\n'.join([
-            f"🆕 <b>{'🟢' if compra else '🔴'} {lado} FVG PREPARADA {tit}</b> · {hora}",
+            f"🆕 {'🟢' if compra else '🔴'} <b>{lado} FVG PREPARADA {tit}</b> · {hora}",
             'Modelo ICT: barrido de liquidez + MSS + FVG', *([nota] if nota else []),
             '━━━━━━━━━━━━━━━━━━',
-            f"👉 Orden <b>{'buy limit' if compra else 'sell limit'}</b> en <code>{_f(s['ent'])}</code> "
-            f"(FVG <code>{_f(s['fvg_lo'])}</code> – <code>{_f(s['fvg_hi'])}</code>)",
-            f"⛔ SL: <code>{_f(s['sl'])}</code> (riesgo {_f(s['R'])} {ud}, detrás del barrido)",
-            f"🎯 TP 2R: <code>{_f(s['t2'])}</code>",
+            '📋 <b>ORDEN PARA MT5</b>',
+            f"Tipo: <b>{'buy limit' if compra else 'sell limit'}</b>",
+            f"Entrada: <code>{_f(s['ent'])}</code> (50 % del FVG <code>{_f(s['fvg_lo'])}</code> – <code>{_f(s['fvg_hi'])}</code>)",
+            f"SL: <code>{_f(s['sl'])}</code> ({_f(s['R'])} {ud}, detrás del barrido)",
+            f"TP: <code>{_f(s['t2'])}</code> (2R)",
             *([fondeo_txt] if fondeo_txt else []),
-            f"⏳ Cancelar si llega a <code>{_f(s['t2'])}</code> sin entrar o tras {BASE['W']} velas.",
-            '━━━━━━━━━━━━━━━━━━', '<b>Por qué puede funcionar</b>', *[x for x in por_que if x],
-            '<b>Por qué puede fallar</b>', *contra])
+            '━━━━━━━━━━━━━━━━━━',
+            '✅ <b>Por qué puede funcionar</b>', *[f"• {x}" for x in por_que],
+            '⚠️ <b>Por qué puede fallar</b>', *[f"• {x}" for x in contra],
+            f"⏳ Cancela la orden si llega a <code>{_f(s['t2'])}</code> sin entrar o tras {BASE['W']} velas."])
     textos = {
         'activada': f"✅ <b>{lado} FVG ACTIVADA {tit}</b> en <code>{_f(s['ent'])}</code> ({hora}). SL <code>{_f(s['sl'])}</code> · TP <code>{_f(s['t2'])}</code>",
         't2': f"🎯 <b>TP FVG {tit}</b> {lado.lower()}: tocado <code>{_f(s['t2'])}</code> (+2R) a las {hora}. Operación terminada.",
