@@ -450,12 +450,11 @@ def tg(texto):
         tok, chat = c['token'], c['chat_id']
     datos = urllib.parse.urlencode({'chat_id': chat, 'text': texto, 'parse_mode': 'HTML'}).encode()
     urllib.request.urlopen(f'https://api.telegram.org/bot{tok}/sendMessage', data=datos, timeout=30).read()
-    if 'XAUUSD' in texto:
-        copia_github(texto)
+    copia_github(texto)                               # todos los activos (desde el 2026-11-05), no solo el oro
 
 
 def copia_github(texto):
-    """En la nube: copia los avisos del oro como comentario de la issue AVISOS_ISSUE (la lee Claude)."""
+    """En la nube: copia cada aviso como comentario de la issue AVISOS_ISSUE (la lee Claude)."""
     n, repo, token = (os.environ.get(k) for k in ('AVISOS_ISSUE', 'GITHUB_REPOSITORY', 'GITHUB_TOKEN'))
     if not (n and repo and token):
         return
