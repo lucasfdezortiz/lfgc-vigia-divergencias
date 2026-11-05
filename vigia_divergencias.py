@@ -9,6 +9,8 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
   - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). Sin avisos de «formándose»
     desde el 2026-11-04: solo la orden preparada y su seguimiento.
+Activos (desde el 2026-11-05): solo XAUUSD, EURUSD y US100 (Nasdaq 100 con los precios del CFD de MT5,
+solo en la sesión de contado de EE. UU., como en la auditoría).
 Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
 de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
@@ -46,18 +48,16 @@ TFS = {
 }
 SEP = '━━━━━━━━━━━━━━━━━━'
 
+# Solo XAUUSD, EURUSD y US100 desde el 2026-11-05 (GBP/USD y USD/JPY fuera; el Nasdaq con precios del US100 de MT5).
 # simbolo Yahoo, nombre, tick, decimales, confirmaciones minimas, tipo de tamano, veredicto de la auditoria
 ACTIVOS = {
-    'QQQ':      dict(yahoo='QQQ', nombre='Nasdaq 100', tick=0.01, dec=2, minconf=3, tipo='accion', coste=0.03, apal=5,
-                     audit='🧪 EN OBSERVACIÓN · Nasdaq M5 3/3 en sesión EE. UU.: PF 1,33 / 1,52 (52 ops 2023-26). Prometedora, no validada.'),
+    'US100':    dict(duka='USATECH.IDX%2FUSD', yahoo='QQQ', nombre='Nasdaq 100', tick=0.1, dec=2, minconf=3, tipo='indice',
+                     coste=1.5, apal=20, solo_rth=True,
+                     audit='🧪 EN OBSERVACIÓN · Nasdaq M5 3/3 en sesión EE. UU.: PF 1,33 / 1,52 (52 ops 2023-26, auditado en QQQ). Prometedora, no validada.'),
     'XAUUSD':   dict(yahoo='GC=F', nombre='Oro contado', tick=0.01, dec=2, minconf=3, tipo='oro', coste=0.40, apal=20,
                      audit='⚠️ NO RENTABLE en el backtest del oro (M5 3/3: PF 0,59 / 1,41). Solo para seguir en demo.'),
     'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=3, tipo='fx', coste=0.00012, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,45-0,89). Solo para seguir en demo.'),
-    'GBPUSD':   dict(yahoo='GBPUSD=X', nombre='GBP/USD', tick=0.00001, dec=5, minconf=3, tipo='fx', coste=0.00015, apal=30,
-                     audit='⚠️ NO VALIDADA en el backtest (M5: PF 0,47-1,26). Solo para seguir en demo.'),
-    'USDJPY':   dict(yahoo='USDJPY=X', nombre='USD/JPY', tick=0.001, dec=3, minconf=3, tipo='fx', coste=0.015, apal=30,
-                     audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,70-1,01). Solo para seguir en demo.'),
 }
 
 
@@ -337,9 +337,9 @@ def vigilancia(d, a, mins=5):
 def tamano(a, R, precio):
     """Unidades para arriesgar el 1 %, limitadas por el apalancamiento minorista (ESMA) de cada activo."""
     obj = CAPITAL * RIESGO
-    if a['tipo'] == 'accion':
-        k = min(max(1, int(obj // R)), int(CAPITAL * a['apal'] // precio))
-        return f"{k} acciones → riesgo ≈ {k * R:.0f} $ ({k * R / CAPITAL:.1%})"
+    if a['tipo'] == 'indice':                                 # US100: 1 $ por punto y lote
+        k = max(1, min(int(obj / R * 100), int(CAPITAL * a['apal'] / precio * 100)))
+        return f"{k / 100:.2f} lotes → riesgo ≈ {k * R / 100:.0f} $ ({k * R / 100 / CAPITAL:.1%})"
     if a['tipo'] == 'oro':                                    # 0,01 lotes = 1 oz
         usd_ud, ud_max = R, CAPITAL * a['apal'] / precio
     else:                                                     # 0,01 lotes = 1.000 unidades
@@ -351,11 +351,11 @@ def tamano(a, R, precio):
 
 
 def fondeo_calc(a, s):
-    """Lotes y dólares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades).
-    Devuelve (lotes, SL $, T1 $, T2 $, tope) o None si el activo no se opera con estos precios (QQQ)."""
-    if a['tipo'] == 'accion':
-        return None
-    if a['tipo'] == 'oro':
+    """Lotes y dólares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades,
+    1 lote US100.cash = 1 $ por punto). Devuelve (lotes, SL $, T1 $, T2 $, tope)."""
+    if a['tipo'] == 'indice':
+        usd_lote, nocional = s['R'], s['ent']
+    elif a['tipo'] == 'oro':
         usd_lote, nocional = s['R'] * 100, 100 * s['ent']
     else:
         usd_lote = s['R'] * 100000 / (s['ent'] if a['yahoo'].startswith('USD') else 1)
@@ -370,10 +370,7 @@ def fondeo_calc(a, s):
 
 
 def fondeo(a, s):
-    f = fondeo_calc(a, s)
-    if f is None:
-        return "🏦 En la cuenta de fondeo se opera el US100 (otros precios): usa el % de riesgo, no estos niveles."
-    lotes, sl, t1, t2, tope = f
+    lotes, sl, t1, t2, tope = fondeo_calc(a, s)
     return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{' (tope de apalancamiento)' if tope else ''} · "
             f"SL <b>−{sl:.0f} $</b> · T1 <b>+{t1:.0f} $</b> · T2 <b>+{t2:.0f} $</b>")
 
@@ -388,14 +385,10 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None, nota=None):
     rr = lambda x: abs(x - s['ent']) / s['R'] if s['R'] else 0
     if evento == 'nueva':
         compra = s['lado'] > 0
-        f = fondeo_calc(a, s)
-        u = ' $' if a['tipo'] == 'oro' else ''
-        if f is None:
-            lotes = ['Lotes: en la FTMO se opera el US100 (otros precios); usa estos niveles solo como referencia.']
-        else:
-            lt, sl_usd, t1_usd, t2_usd, tope = f
-            lotes = [f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lt:.2f}</b>{' (tope de apalancamiento)' if tope else ''} → "
-                     f"SL <b>−{sl_usd:.0f} $</b> · TP <b>+{t2_usd:.0f} $</b>"]
+        lt, sl_usd, t1_usd, t2_usd, tope = fondeo_calc(a, s)
+        u = {'oro': ' $', 'indice': ' pt'}.get(a['tipo'], '')
+        lotes = [f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lt:.2f}</b>{' (tope de apalancamiento)' if tope else ''} → "
+                 f"SL <b>−{sl_usd:.0f} $</b> · TP <b>+{t2_usd:.0f} $</b>"]
         avisos = []
         if tfl == '1 min':
             avisos.append('1 min va fuera del plan de fondeo: en conjunto no es rentable; mira la fiabilidad.')
@@ -493,6 +486,11 @@ def main(prueba=False, informe=False, todas=True):
                         d = velas_oro(tf)
                     except Exception as ex:
                         errores.append(f'oro {tf}: Dukascopy no disponible ({ex}); se usa Yahoo con ~10 min de retraso')
+                if d is None and 'duka' in a:              # US100: CFD de Dukascopy en tiempo real (los niveles de MT5)
+                    d = velas_duka(tf, a['duka'])
+                    if a.get('solo_rth'):                     # como la auditoría en QQQ: solo la sesión de contado de EE. UU.
+                        ny = d.index.tz_convert('America/New_York'); x = ny.hour + ny.minute / 60
+                        d = d[(x >= 9.5) & (x < 16) & (ny.weekday < 5)]
                 if d is None:
                     d = velas(a['yahoo'], tf)
                     if sim == 'XAUUSD':                       # futuro GC -> precio contado (lo que ves en MT5)
@@ -592,7 +590,7 @@ def texto_informe(hoy, errores, notas=None):
     if por_nota:                                      # feedback de la mezcla: ¿las 🟢 rinden mejor que las 🔴?
         lineas.append('Oro por fiabilidad: ' + ' · '.join(f"{k} {n} ops {x:+.1f}R" for k, (n, x) in
                                                             sorted(por_nota.items(), key=lambda z: '🟢🟡🔴⚪'.find(z[0]))))
-    lineas.append('\nRecuerda: solo QQQ (5 min, 3/3, sesión EE. UU.) pasó la auditoría, y con muestra pequeña; las señales con menos confirmaciones son menos fiables.')
+    lineas.append('\nRecuerda: solo el Nasdaq (US100, 5 min, 3/3, sesión EE. UU.) pasó la auditoría, y con muestra pequeña; las señales con menos confirmaciones son menos fiables.')
     if errores:
         lineas.append('⚠️ ' + '; '.join(errores))
     return '\n'.join(lineas)
