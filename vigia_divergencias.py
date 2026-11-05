@@ -9,8 +9,8 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
   - La orden se cancela si se hace nuevo extremo antes de entrar o tras 60 velas.
   - Solo se avisa con el filtro completo: 3/3 (MACD + RSI + volumen); 2/2 en divisas (sin volumen). Sin avisos de «formándose»
     desde el 2026-11-04: solo la orden preparada y su seguimiento.
-Activos (desde el 2026-11-05): solo XAUUSD, EURUSD y US100 (Nasdaq 100 con los precios del CFD de MT5,
-solo en la sesión de contado de EE. UU., como en la auditoría).
+Activos (desde el 2026-11-05): solo XAUUSD, EURUSD, US100, DXY y BTCUSD (Nasdaq 100 con los precios del CFD de MT5,
+solo en la sesión de contado de EE. UU., como en la auditoría; DXY y BTC con velas de Dukascopy, sin backtest).
 Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
 de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
@@ -48,7 +48,7 @@ TFS = {
 }
 SEP = '━━━━━━━━━━━━━━━━━━'
 
-# Solo XAUUSD, EURUSD y US100 desde el 2026-11-05 (GBP/USD y USD/JPY fuera; el Nasdaq con precios del US100 de MT5).
+# Solo XAUUSD, EURUSD, US100, DXY y BTCUSD desde el 2026-11-05 (GBP/USD y USD/JPY fuera; el Nasdaq con precios del US100 de MT5).
 # simbolo Yahoo, nombre, tick, decimales, confirmaciones minimas, tipo de tamano, veredicto de la auditoria
 ACTIVOS = {
     'US100':    dict(duka='USATECH.IDX%2FUSD', yahoo='QQQ', nombre='Nasdaq 100', tick=0.1, dec=2, minconf=3, tipo='indice',
@@ -58,6 +58,13 @@ ACTIVOS = {
                      audit='⚠️ NO RENTABLE en el backtest del oro (M5 3/3: PF 0,59 / 1,41). Solo para seguir en demo.'),
     'EURUSD':   dict(yahoo='EURUSD=X', nombre='EUR/USD', tick=0.00001, dec=5, minconf=3, tipo='fx', coste=0.00012, apal=30,
                      audit='⚠️ NO RENTABLE en el backtest (M5: PF 0,45-0,89). Solo para seguir en demo.'),
+    # DXY y BTC (desde el 2026-11-05): sin backtest; lotes cuando se conozca el tamaño del contrato en MT5 (valor = $ por punto y lote)
+    'DXY':      dict(duka='DOLLAR.IDX%2FUSD', yahoo='DX-Y.NYB', nombre='Índice dólar', tick=0.001, dec=3, minconf=3, tipo='cfd',
+                     valor=None, coste=0.03, apal=20,
+                     audit='⚪ SIN BACKTEST: las divergencias no se han auditado en el DXY. Solo para seguir en demo.'),
+    'BTCUSD':   dict(duka='BTC%2FUSD', yahoo='BTC-USD', nombre='Bitcoin', tick=0.1, dec=1, minconf=3, tipo='cfd',
+                     valor=None, coste=30.0, apal=2,
+                     audit='⚪ SIN BACKTEST: las divergencias no se han auditado en BTC. Solo para seguir en demo.'),
 }
 
 
@@ -337,6 +344,8 @@ def vigilancia(d, a, mins=5):
 def tamano(a, R, precio):
     """Unidades para arriesgar el 1 %, limitadas por el apalancamiento minorista (ESMA) de cada activo."""
     obj = CAPITAL * RIESGO
+    if a['tipo'] == 'cfd':
+        return 'lotes: falta el tamaño del contrato en MT5'
     if a['tipo'] == 'indice':                                 # US100: 1 $ por punto y lote
         k = max(1, min(int(obj / R * 100), int(CAPITAL * a['apal'] / precio * 100)))
         return f"{k / 100:.2f} lotes → riesgo ≈ {k * R / 100:.0f} $ ({k * R / 100 / CAPITAL:.1%})"
@@ -352,8 +361,12 @@ def tamano(a, R, precio):
 
 def fondeo_calc(a, s):
     """Lotes y dólares en la cuenta de fondeo (CFD: 1 lote oro = 100 oz, 1 lote divisas = 100.000 unidades,
-    1 lote US100.cash = 1 $ por punto). Devuelve (lotes, SL $, T1 $, T2 $, tope)."""
-    if a['tipo'] == 'indice':
+    1 lote US100.cash = 1 $ por punto). Devuelve (lotes, SL $, T1 $, T2 $, tope), o None si falta el tamaño del contrato."""
+    if a['tipo'] == 'cfd':
+        if not a.get('valor'):
+            return None
+        usd_lote, nocional = s['R'] * a['valor'], s['ent'] * a['valor']
+    elif a['tipo'] == 'indice':
         usd_lote, nocional = s['R'], s['ent']
     elif a['tipo'] == 'oro':
         usd_lote, nocional = s['R'] * 100, 100 * s['ent']
@@ -370,7 +383,10 @@ def fondeo_calc(a, s):
 
 
 def fondeo(a, s):
-    lotes, sl, t1, t2, tope = fondeo_calc(a, s)
+    f = fondeo_calc(a, s)
+    if f is None:
+        return f"🏦 {FONDEO}: falta el tamaño del contrato en MT5 para calcular los lotes."
+    lotes, sl, t1, t2, tope = f
     return (f"🏦 <b>{FONDEO}</b> ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f} lotes</b>{' (tope de apalancamiento)' if tope else ''} · "
             f"SL <b>−{sl:.0f} $</b> · T1 <b>+{t1:.0f} $</b> · T2 <b>+{t2:.0f} $</b>")
 
@@ -385,10 +401,15 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None, nota=None):
     rr = lambda x: abs(x - s['ent']) / s['R'] if s['R'] else 0
     if evento == 'nueva':
         compra = s['lado'] > 0
-        lt, sl_usd, t1_usd, t2_usd, tope = fondeo_calc(a, s)
-        u = {'oro': ' $', 'indice': ' pt'}.get(a['tipo'], '')
-        lotes = [f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lt:.2f}</b>{' (tope de apalancamiento)' if tope else ''} → "
-                 f"SL <b>−{sl_usd:.0f} $</b> · TP <b>+{t2_usd:.0f} $</b>"]
+        f = fondeo_calc(a, s)
+        u = {'oro': ' $', 'indice': ' pt', 'cfd': ' pt'}.get(a['tipo'], '')
+        if f is None:
+            lotes = [f"Lotes: falta el tamaño del contrato de {sim} en MT5; arriesga {FONDEO_RIESGO:.1%} ({FONDEO_CAP * FONDEO_RIESGO:.0f} $) "
+                     f"con lotes = {FONDEO_CAP * FONDEO_RIESGO:.0f} $ ÷ ({fmt(a, s['R'])} × $ por punto y lote)."]
+        else:
+            lt, sl_usd, t1_usd, t2_usd, tope = f
+            lotes = [f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lt:.2f}</b>{' (tope de apalancamiento)' if tope else ''} → "
+                     f"SL <b>−{sl_usd:.0f} $</b> · TP <b>+{t2_usd:.0f} $</b>"]
         avisos = []
         if tfl == '1 min':
             avisos.append('1 min va fuera del plan de fondeo: en conjunto no es rentable; mira la fiabilidad.')

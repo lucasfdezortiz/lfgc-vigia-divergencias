@@ -464,7 +464,7 @@ def msg_control(e, prov=None, operadas=0):
                   'provisional (extremo sin confirmar)' if p is prov else 'oficial')
         l += [f"📐 Pauta {estado}", *_cuerpo_nivel(e, p, operadas)]
     l += [SEP, "2️⃣ <b>FVG ICT · oro y Nasdaq</b> · extra al 0,5 % · no validado", *bloque_fvg(),
-          SEP, "3️⃣ <b>Divergencias (Trullás)</b> · XAUUSD, EURUSD y US100 · extra al 0,5 %",
+          SEP, "3️⃣ <b>Divergencias (Trullás)</b> · XAUUSD, EURUSD, US100, DXY y BTC · extra al 0,5 %",
           "Te llegan solo cuando hay una orden que preparar (🆕); en el oro, con su nota de fiabilidad 🟢 / 🟡 / 🔴.",
           "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; las demás son extras al 0,5 % y decides tú.</i>"]
     return '\n'.join(l)
