@@ -98,6 +98,18 @@ def escanear(d, mins=5, P=None):
     return ops
 
 
+def resumen_dia(d, P=None):
+    """Precio, variación frente al cierre de contado anterior (16:00 NY) y si la sesión de Nueva York está abierta."""
+    P = dict(BASE, **(P or {}))
+    loc = d.index.tz_convert(P['tz']); h = loc.hour + loc.minute / 60
+    hoy = loc[-1].date()
+    prev = d.Close[(loc.date < hoy) & (h < P['cierre'])]
+    ref = float(prev.iloc[-1]) if len(prev) else float('nan')
+    precio = float(d.Close.iloc[-1])
+    abierta = 9.5 <= h[-1] < P['cierre'] and loc[-1].weekday() < 5
+    return precio, (precio / ref - 1) * 100 if ref == ref else float('nan'), abierta
+
+
 def estado(d, mins=5, P=None):
     """Foto para el punto de control: contexto, zonas, umbral de las velas, operación abierta y ops de hoy."""
     P = dict(BASE, **(P or {}))
@@ -118,23 +130,29 @@ def _hora(h, P=BASE):
 
 
 def texto_control(sim, e, ud='pt', tfl='5 min'):
-    f = lambda x: f"{x:.2f}"
-    ctx = {1: '🟢 largo (actual y periférica rotas al alza)', -1: '🔴 corto (actual y periférica rotas a la baja)'}.get(
-        e['ali'], {1: '🟡 solo la actual es alcista', -1: '🟡 solo la actual es bajista'}.get(e['act'], '⚪ sin dirección'))
-    l = [f"👉 <b>{sim} · {tfl}</b> ({f(e['precio'])}): contexto {ctx}"]
+    """Líneas del punto de control: contexto, niveles que deciden la dirección y qué falta (o la operación abierta)."""
+    f = lambda x: f"{x:,.1f}"
+    ctx = {1: '🟢 alcista (actual y periférica rotas al alza)', -1: '🔴 bajista (actual y periférica rotas a la baja)'}.get(
+        e['ali'], {1: '🟡 solo la estructura actual es alcista', -1: '🟡 solo la estructura actual es bajista'}.get(
+            e['act'], '⚪ sin dirección'))
+    hoy = f" · hoy {e['n_hoy']} op." if e['n_hoy'] else ''
+    l = [f"👉 <b>{tfl}</b>: {ctx}{hoy}"]
     z = e['zonas']
-    if z['dem'] or z['ofe']:
-        l.append('   🧱 Zonas: ' + ' · '.join(
-            [f"demanda {f(a)}–{f(b)}" for a, b in reversed(z['dem'])] + [f"oferta {f(a)}–{f(b)}" for a, b in reversed(z['ofe'])]))
+    niv = []                                     # la actual primero; para largos cuenta el máximo de la oferta, para cortos el mínimo de la demanda
+    if z['ofe']:
+        niv.append('compras sobre ' + ' y '.join(f(b) for a, b in reversed(z['ofe'])))
+    if z['dem']:
+        niv.append('ventas bajo ' + ' y '.join(f(a) for a, b in reversed(z['dem'])))
+    if niv:
+        l.append('   📏 Niveles (actual y periférica): ' + ' · '.join(niv))
     if e['op']:
-        s = e['op']
-        l.append(f"   📌 Operación abierta: {'compra' if s['lado'] > 0 else 'venta'} en {f(s['ent'])} · SL {f(s['sl'])} · TP {f(s['t2'])}")
+        o = e['op']
+        l.append(f"   📌 {'Compra' if o['lado'] > 0 else 'Venta'} abierta en {f(o['ent'])} · SL {f(o['sl'])} · TP {f(o['t2'])}")
     elif e['ali']:
         l.append(f"   ⏳ Falta el gatillo: dos velas de {tfl} {'alcistas' if e['ali'] > 0 else 'bajistas'} seguidas con cuerpo ≥ "
-                 f"{e['umbral']:.1f} {ud} cada una, entre las {_hora(BASE['ini'])} y las {_hora(BASE['fin'])} (España).")
+                 f"{e['umbral']:.0f} {ud}, entre las {_hora(BASE['ini'])} y las {_hora(BASE['fin'])}.")
     else:
-        l.append('   ⏳ Falta que el precio rompa las dos zonas del mismo lado (actual y periférica).')
-    l.append(f"   Hoy: {e['n_hoy']} {'operación' if e['n_hoy'] == 1 else 'operaciones'}.")
+        l.append('   ⏳ Sin contexto: falta que el precio rompa los dos niveles de un mismo lado.')
     return l
 
 

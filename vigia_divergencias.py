@@ -38,6 +38,11 @@ N, ESPERA, MIN_SEP, MAX_SEP = 3, 60, 5, 120
 F_ENT, F_T1, F_T2 = 0.236, 0.382, 0.618
 VENTANA = pd.Timedelta(hours=3)
 AVISO_FORMACION = False                # 2026-11-04, Lucas: divergencias solo al preparar la orden y su seguimiento, sin «formándose»        # no se avisa de eventos mas antiguos (primer arranque, retrasos)
+# 2026-11-11, Lucas: menos avisos. Solo 5 y 15 min, y de cada estrategia solo lo que obliga a hacer algo en MT5: la orden
+# (o la entrada a mercado), su cancelación y el cierre forzoso. Sin barridos previos, sin «activada», T1, T2 ni stop:
+# el resultado sale en el informe de las 22:00.
+TF_AVISOS = ('5m', '15m')
+AVISAR = {'div': {'nueva', 'cancelada'}, 'fvg': {'nueva', 'cancelada', 'caducada', 'cierre'}, 'gl': {'activada', 'cierre'}}
 # temporalidad: (minutos, intervalo y rango de Yahoo, nombre, avisos previos, auditoria 2023-2026 de esa temporalidad)
 TFS = {
     '1m':  (1, '1m', '2d', '1 min', False,
@@ -209,9 +214,7 @@ def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
         clave = f"{sim}|{pre}{tf}|{b['id']}"
         if clave in enviados or ahora - b['t'] > VENTANA:
             continue
-        if FVG._ventana(b['t'], 'kz') or FVG._ventana(b['limite'], 'kz'):
-            salida.append((b['t'], FVG.mensaje(b, 'barrido', b['t'], tfl, sim=sim, coste=c['coste'], ud=c['ud'])))
-        enviados.add(clave)
+        enviados.add(clave)                           # el barrido ya no se avisa (2026-11-11): solo la orden
     for s in setups:
         for t, evento, precio in s['ev']:
             clave = f"{sim}|{pre}{tf}|{s['id']}|{evento}"
@@ -219,7 +222,8 @@ def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
                 hoy.append((sim, s, evento, f'FVG {tfl}'))
             if clave in enviados or ahora - t > VENTANA:
                 continue
-            salida.append((t, FVG.mensaje(s, evento, t, tfl, fondeo_fvg(sim, s), c['nota'][tf], sim, c['coste'], c['ud'])))
+            if evento in AVISAR['fvg']:
+                salida.append((t, FVG.mensaje(s, evento, t, tfl, fondeo_fvg(sim, s), c['nota'][tf], sim, c['coste'], c['ud'])))
             enviados.add(clave)
 
 
@@ -241,8 +245,9 @@ def gl_avisos(d, tf, mins, tfl, ahora, enviados, salida, hoy):
                 hoy.append(('US100', s, evento, f'GL {tfl}'))
             if clave in enviados or ahora - t > VENTANA:
                 continue
-            salida.append((t, GL.mensaje(s, evento, t, tfl, fondeo_fvg('US100', s, GL.BASE['rr']), GL_NOTA[tf],
-                                         'US100', c['coste'], c['ud'])))
+            if evento in AVISAR['gl']:
+                salida.append((t, GL.mensaje(s, evento, t, tfl, fondeo_fvg('US100', s, GL.BASE['rr']), GL_NOTA[tf],
+                                             'US100', c['coste'], c['ud'])))
             enviados.add(clave)
 
 
@@ -519,7 +524,8 @@ def main(prueba=False, informe=False, todas=True):
             except Exception as ex:
                 ctx.append(None); errores.append(f'contexto del oro no disponible ({ex})')
         return ctx[0]
-    for tf, (mins, _, _, tfl, previos, audit_tf) in TFS.items():
+    for tf in TF_AVISOS:                              # sin 1 min ni 1 h desde el 2026-11-11
+        mins, _, _, tfl, previos, audit_tf = TFS[tf]
         # cada temporalidad se descarga justo despues de cerrar su vela (y siempre en la primera vuelta y el informe)
         if not (todas or toca_informe or minuto % mins == 0):
             continue
@@ -576,7 +582,8 @@ def main(prueba=False, informe=False, todas=True):
                         if sim == 'XAUUSD' and evento == 'nueva':    # nota de fiabilidad (mezcla con la v2.3)
                             ico, nota = nota_oro(tf, s['lado'], s['R'], contexto())
                             notas[f"{pre}{s['id']}"] = ico
-                        salida.append((t, mensaje(sim, a, s, evento, t, precio, tfl, audit, nota)))
+                        if evento in AVISAR['div']:
+                            salida.append((t, mensaje(sim, a, s, evento, t, precio, tfl, audit, nota)))
                         enviados.add(clave)
             except Exception as e:
                 errores.append(f'{sim} {tf}: {e}')
