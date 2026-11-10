@@ -11,6 +11,7 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
     desde el 2026-11-04: solo la orden preparada y su seguimiento.
 Activos (desde el 2026-11-05): solo XAUUSD, EURUSD, US100, DXY y BTCUSD (Nasdaq 100 con los precios del CFD de MT5,
 solo en la sesión de contado de EE. UU., como en la auditoría; DXY y BTC con velas de Dukascopy, sin backtest).
+Nasdaq 100 (US100), además: momentum de dos velas de Gian Luca en 5 min (momentum_gl.py, desde el 2026-11-10).
 Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
 de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
@@ -24,6 +25,7 @@ Telegram: variables TELEGRAM_TOKEN y TELEGRAM_CHAT, o config_telegram.json junto
 import json, math, os, sys, time, urllib.request, urllib.parse, datetime as dt
 import numpy as np, pandas as pd
 import fvg_ict as FVG
+import momentum_gl as GL
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 ESTADO = os.environ.get('VIGIA_ESTADO') or os.path.join(AQUI, 'data', 'vigia_divergencias.json')
@@ -187,7 +189,7 @@ FVG_ACT = {
 }
 
 
-def fondeo_fvg(sim, s):
+def fondeo_fvg(sim, s, rr=None):
     """Lotes de la FTMO al riesgo de las extras: riesgo $ / (stop × valor de 1 punto por lote), con tope de apalancamiento."""
     c = FVG_ACT[sim]
     lotes = math.floor(FONDEO_CAP * FONDEO_RIESGO / (s['R'] * c['valor']) * 100) / 100
@@ -195,7 +197,7 @@ def fondeo_fvg(sim, s):
     nota = ' (tope de apalancamiento)' if lotes > tope else ''
     lotes = max(0.01, min(lotes, tope)); sl = lotes * c['valor'] * s['R']
     return (f"Lotes FTMO ({FONDEO_RIESGO:.1%}): <b>{lotes:.2f}</b>{nota} → SL <b>−{sl:.0f} $</b> · "
-            f"TP <b>+{sl * FVG.BASE['rr']:.0f} $</b>")
+            f"TP <b>+{sl * (rr or FVG.BASE['rr']):.0f} $</b>")
 
 
 def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
@@ -218,6 +220,25 @@ def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
             if clave in enviados or ahora - t > VENTANA:
                 continue
             salida.append((t, FVG.mensaje(s, evento, t, tfl, fondeo_fvg(sim, s), c['nota'][tf], sim, c['coste'], c['ud'])))
+            enviados.add(clave)
+
+
+GL_NOTA = ('🧭 Fiabilidad 🧪 EN OBSERVACIÓN · backtest US100 2023-26: 562 ops, acierto 47 %, E +0,09R neta, '
+           'PF 1,20 / 1,17 (OPERATIVA §27). Extra al 0,5 %, decides tú.')
+
+
+def gl_avisos(d, ahora, enviados, salida, hoy):
+    """Momentum de dos velas de Gian Luca (US100, 5 min): entrada a mercado, TP, stop y cierre de sesión."""
+    c = FVG_ACT['US100']
+    for s in GL.escanear(d, 5):
+        for t, evento, precio in s['ev']:
+            clave = f"US100|gl|{s['id']}|{evento}"
+            if t.date() == ahora.date():
+                hoy.append(('US100', s, evento, 'GL 5 min'))
+            if clave in enviados or ahora - t > VENTANA:
+                continue
+            salida.append((t, GL.mensaje(s, evento, t, '5 min', fondeo_fvg('US100', s, GL.BASE['rr']), GL_NOTA,
+                                         'US100', c['coste'], c['ud'])))
             enviados.add(clave)
 
 
@@ -507,7 +528,10 @@ def main(prueba=False, informe=False, todas=True):
                     except Exception as ex:
                         errores.append(f'oro {tf}: Dukascopy no disponible ({ex}); se usa Yahoo con ~10 min de retraso')
                 if d is None and 'duka' in a:              # US100: CFD de Dukascopy en tiempo real (los niveles de MT5)
-                    d = velas_duka(tf, a['duka'])
+                    try:
+                        d = velas_duka(tf, a['duka'])
+                    except ValueError:
+                        continue                              # pausa diaria del mercado: sin velas nuevas
                     if a.get('solo_rth'):                     # como la auditoría en QQQ: solo la sesión de contado de EE. UU.
                         ny = d.index.tz_convert('America/New_York'); x = ny.hour + ny.minute / 60
                         d = d[(x >= 9.5) & (x < 16) & (ny.weekday < 5)]
@@ -556,11 +580,20 @@ def main(prueba=False, informe=False, todas=True):
         mins, tfl = TFS[tf][0], TFS[tf][3]
         if todas or toca_informe or minuto % mins == 0:
             try:
-                fvg_avisos('US100', velas_duka(tf, FVG_ACT['US100']['ins']), tf, mins, tfl, ahora, enviados, salida, hoy)
+                d_us = velas_duka(tf, FVG_ACT['US100']['ins'])
             except ValueError:
-                pass                                  # pausa diaria del índice: sin velas nuevas
+                continue                              # pausa diaria del índice: sin velas nuevas
+            except Exception as ex:
+                errores.append(f'US100 {tf}: {ex}'); continue
+            try:
+                fvg_avisos('US100', d_us, tf, mins, tfl, ahora, enviados, salida, hoy)
             except Exception as ex:
                 errores.append(f'FVG US100 {tf}: {ex}')
+            if tf == '5m':                            # momentum de dos velas de Gian Luca (desde el 2026-11-10)
+                try:
+                    gl_avisos(d_us, ahora, enviados, salida, hoy)
+                except Exception as ex:
+                    errores.append(f'Momentum GL US100: {ex}')
     salida.sort(key=lambda x: x[0])
     mensajes = [m for _, m in salida]
     if toca_informe:
@@ -589,7 +622,7 @@ def texto_informe(hoy, errores, notas=None):
         finales[(sim, tfl, s['id'])] = (sim, s, evento, tfl)
     if not finales:
         lineas.append('Hoy no hubo divergencias que cumplan las reglas.')
-    total, por_nota, fvg = 0.0, {}, [0, 0.0]
+    total, por_nota, fvg, gl = 0.0, {}, [0, 0.0], [0, 0.0]
     for sim, s, evento, tfl in sorted(finales.values(), key=lambda x: (x[3], x[0])):
         ico = notas.get(f"{pre.get(tfl, '')}{s['id']}", '') if sim == 'XAUUSD' else ''
         r = {'t2': abs(s['t2'] - s['ent']) / s['R'], 'stop': -1.0, 'cierre': s.get('r_cierre')}.get(evento)
@@ -597,16 +630,20 @@ def texto_informe(hoy, errores, notas=None):
             total += r
             if tfl.startswith('FVG'):                 # oro y Nasdaq juntos
                 fvg[0] += 1; fvg[1] += r
+            elif tfl.startswith('GL'):
+                gl[0] += 1; gl[1] += r
             elif ico:
                 n, x = por_nota.get(ico, (0, 0.0)); por_nota[ico] = (n + 1, x + r)
         nom = {'nueva': 'pendiente', 'activada': 'abierta', 't1': 'abierta (T1 tocado)', 't2': 'T2 ✅',
                'stop': 'stop ⛔', 'cancelada': 'cancelada', 'caducada': 'caducada', 'cierre': 'cerrada a las 16:00 NY'}[evento]
-        conf = f" {s['conf']}/{s['maxconf']}" if 'conf' in s else ' (barrido + MSS)'
+        conf = f" {s['conf']}/{s['maxconf']}" if 'conf' in s else s.get('etq', ' (barrido + MSS)')
         lineas.append(f"• {sim} {tfl} {'venta' if s['lado'] < 0 else 'compra'}{conf}{' ' + ico if ico else ''}: {nom}")
     if finales:
         lineas.append(f"\nResultado de las cerradas hoy (objetivo T2): {total:+.1f}R")
     if fvg[0]:
         lineas.append(f"Modelo FVG (ICT, no validado): {fvg[0]} ops {fvg[1]:+.1f}R")
+    if gl[0]:
+        lineas.append(f"Momentum GL (US100, en observación): {gl[0]} ops {gl[1]:+.1f}R")
     if por_nota:                                      # feedback de la mezcla: ¿las 🟢 rinden mejor que las 🔴?
         lineas.append('Oro por fiabilidad: ' + ' · '.join(f"{k} {n} ops {x:+.1f}R" for k, (n, x) in
                                                             sorted(por_nota.items(), key=lambda z: '🟢🟡🔴⚪'.find(z[0]))))
