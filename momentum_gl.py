@@ -1,4 +1,4 @@
-"""Momentum de dos velas de Gian Luca Bruni (OPERATIVA §27), para el US100 en 5 min.
+"""Momentum de dos velas de Gian Luca Bruni (OPERATIVA §27), para el US100 en 5 y 15 min.
 
 - Vela válida: cuerpo mayor que la mecha más larga. Tres válidas seguidas del mismo color forman una zona; la última es la
   estructura «actual» y la anterior, la «periférica». Corto si el precio ha cerrado por debajo de las dos zonas verdes
@@ -117,11 +117,11 @@ def _hora(h, P=BASE):
     return t.tz_convert(MADRID).strftime('%H:%M')
 
 
-def texto_control(sim, e, ud='pt'):
+def texto_control(sim, e, ud='pt', tfl='5 min'):
     f = lambda x: f"{x:.2f}"
     ctx = {1: '🟢 largo (actual y periférica rotas al alza)', -1: '🔴 corto (actual y periférica rotas a la baja)'}.get(
         e['ali'], {1: '🟡 solo la actual es alcista', -1: '🟡 solo la actual es bajista'}.get(e['act'], '⚪ sin dirección'))
-    l = [f"👉 <b>{sim}</b> ({f(e['precio'])}): contexto {ctx}"]
+    l = [f"👉 <b>{sim} · {tfl}</b> ({f(e['precio'])}): contexto {ctx}"]
     z = e['zonas']
     if z['dem'] or z['ofe']:
         l.append('   🧱 Zonas: ' + ' · '.join(
@@ -130,11 +130,11 @@ def texto_control(sim, e, ud='pt'):
         s = e['op']
         l.append(f"   📌 Operación abierta: {'compra' if s['lado'] > 0 else 'venta'} en {f(s['ent'])} · SL {f(s['sl'])} · TP {f(s['t2'])}")
     elif e['ali']:
-        l.append(f"   ⏳ Falta el gatillo: dos velas de 5 min {'alcistas' if e['ali'] > 0 else 'bajistas'} seguidas con cuerpo ≥ "
+        l.append(f"   ⏳ Falta el gatillo: dos velas de {tfl} {'alcistas' if e['ali'] > 0 else 'bajistas'} seguidas con cuerpo ≥ "
                  f"{e['umbral']:.1f} {ud} cada una, entre las {_hora(BASE['ini'])} y las {_hora(BASE['fin'])} (España).")
     else:
         l.append('   ⏳ Falta que el precio rompa las dos zonas del mismo lado (actual y periférica).')
-    l.append(f"   Hoy: {e['n_hoy']} operación{'es' if e['n_hoy'] != 1 else ''}.")
+    l.append(f"   Hoy: {e['n_hoy']} {'operación' if e['n_hoy'] == 1 else 'operaciones'}.")
     return l
 
 

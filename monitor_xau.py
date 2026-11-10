@@ -437,11 +437,14 @@ def bloque_fvg():
 
 
 def bloque_gl():
-    """Sección del momentum de dos velas de Gian Luca (US100, 5 min) para el punto de control."""
+    """Sección del momentum de dos velas de Gian Luca (US100, 5 y 15 min) para el punto de control."""
     try:
         import momentum_gl as GL, vigia_divergencias as VG
-        e = GL.estado(VG.velas_duka('5m', VG.FVG_ACT['US100']['ins']), 5)
-        return GL.texto_control('US100', e)
+        l = []
+        for tf, mins in (('5m', 5), ('15m', 15)):
+            e = GL.estado(VG.velas_duka(tf, VG.FVG_ACT['US100']['ins']), mins)
+            l += GL.texto_control('US100', e, tfl=f'{mins} min')
+        return l
     except ImportError as ex:
         return [f"⚠️ Momentum GL no disponible ({ex})"]
     except Exception:
@@ -476,7 +479,7 @@ def msg_control(e, prov=None, operadas=0):
                   'provisional (extremo sin confirmar)' if p is prov else 'oficial')
         l += [f"📐 Pauta {estado}", *_cuerpo_nivel(e, p, operadas)]
     l += [SEP, "2️⃣ <b>FVG ICT · oro y Nasdaq</b> · extra al 0,5 % · no validado", *bloque_fvg(),
-          SEP, "3️⃣ <b>Momentum GL (Gian Luca) · US100 5 min</b> · extra al 0,5 % · en observación", *bloque_gl(),
+          SEP, "3️⃣ <b>Momentum GL (Gian Luca) · US100 5 y 15 min</b> · extra al 0,5 % · en observación", *bloque_gl(),
           SEP, "4️⃣ <b>Divergencias (Trullás)</b> · XAUUSD, EURUSD, US100, DXY y BTC · extra al 0,5 %",
           "Te llegan solo cuando hay una orden que preparar (🆕); en el oro, con su nota de fiabilidad 🟢 / 🟡 / 🔴.",
           "<i>Solo la 🚨 SEÑAL v2.3 va al 3 %; las demás son extras al 0,5 % y decides tú.</i>"]

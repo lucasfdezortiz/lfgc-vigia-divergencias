@@ -11,7 +11,7 @@ Mismas reglas que backtest/trullas_divergencias.py y tradingview/Divergencias_Fi
     desde el 2026-11-04: solo la orden preparada y su seguimiento.
 Activos (desde el 2026-11-05): solo XAUUSD, EURUSD, US100, DXY y BTCUSD (Nasdaq 100 con los precios del CFD de MT5,
 solo en la sesión de contado de EE. UU., como en la auditoría; DXY y BTC con velas de Dukascopy, sin backtest).
-Nasdaq 100 (US100), además: momentum de dos velas de Gian Luca en 5 min (momentum_gl.py, desde el 2026-11-10).
+Nasdaq 100 (US100), además: momentum de dos velas de Gian Luca en 5 y 15 min (momentum_gl.py, desde el 2026-11-10).
 Oro y Nasdaq 100 (US100), además: modelo ICT barrido de liquidez + MSS + FVG en 5 y 15 min (fvg_ict.py), con el porqué
 de cada orden.
 Avisos: 🆕 orden preparada · ✅ activada · 🎯 T1 / T2 · ⛔ stop · ❌ cancelada / caducada · 📋 informe del dia.
@@ -223,21 +223,25 @@ def fvg_avisos(sim, d, tf, mins, tfl, ahora, enviados, salida, hoy):
             enviados.add(clave)
 
 
-GL_NOTA = ('🧭 Fiabilidad 🧪 EN OBSERVACIÓN · backtest US100 2023-26: 562 ops, acierto 47 %, E +0,09R neta, '
-           'PF 1,20 / 1,17 (OPERATIVA §27). Extra al 0,5 %, decides tú.')
+GL_NOTA = {
+    '5m': ('🧭 Fiabilidad 🧪 EN OBSERVACIÓN · backtest US100 5 min 2023-26: 562 ops, acierto 47 %, E +0,09R neta, '
+           'PF 1,20 / 1,17, positiva los cuatro años (OPERATIVA §27). Extra al 0,5 %, decides tú.'),
+    '15m': ('🧭 Fiabilidad 🧪 EN OBSERVACIÓN · backtest US100 15 min 2023-26: 341 ops, acierto 50 %, E +0,05R neta, '
+            'PF 1,11 / 1,15; 2024 en negativo. Peor que la de 5 min: extra al 0,5 %, decides tú.')}
 
 
-def gl_avisos(d, ahora, enviados, salida, hoy):
-    """Momentum de dos velas de Gian Luca (US100, 5 min): entrada a mercado, TP, stop y cierre de sesión."""
+def gl_avisos(d, tf, mins, tfl, ahora, enviados, salida, hoy):
+    """Momentum de dos velas de Gian Luca (US100, 5 y 15 min): entrada a mercado, TP, stop y cierre de sesión."""
     c = FVG_ACT['US100']
-    for s in GL.escanear(d, 5):
+    pre = 'gl' if tf == '5m' else f'gl{mins}'          # 5 min conserva sus claves
+    for s in GL.escanear(d, mins):
         for t, evento, precio in s['ev']:
-            clave = f"US100|gl|{s['id']}|{evento}"
+            clave = f"US100|{pre}|{s['id']}|{evento}"
             if t.date() == ahora.date():
-                hoy.append(('US100', s, evento, 'GL 5 min'))
+                hoy.append(('US100', s, evento, f'GL {tfl}'))
             if clave in enviados or ahora - t > VENTANA:
                 continue
-            salida.append((t, GL.mensaje(s, evento, t, '5 min', fondeo_fvg('US100', s, GL.BASE['rr']), GL_NOTA,
+            salida.append((t, GL.mensaje(s, evento, t, tfl, fondeo_fvg('US100', s, GL.BASE['rr']), GL_NOTA[tf],
                                          'US100', c['coste'], c['ud'])))
             enviados.add(clave)
 
@@ -589,11 +593,10 @@ def main(prueba=False, informe=False, todas=True):
                 fvg_avisos('US100', d_us, tf, mins, tfl, ahora, enviados, salida, hoy)
             except Exception as ex:
                 errores.append(f'FVG US100 {tf}: {ex}')
-            if tf == '5m':                            # momentum de dos velas de Gian Luca (desde el 2026-11-10)
-                try:
-                    gl_avisos(d_us, ahora, enviados, salida, hoy)
-                except Exception as ex:
-                    errores.append(f'Momentum GL US100: {ex}')
+            try:                                      # momentum de dos velas de Gian Luca (5 min y, desde el 2026-11-11, 15 min)
+                gl_avisos(d_us, tf, mins, tfl, ahora, enviados, salida, hoy)
+            except Exception as ex:
+                errores.append(f'Momentum GL US100 {tf}: {ex}')
     salida.sort(key=lambda x: x[0])
     mensajes = [m for _, m in salida]
     if toca_informe:
