@@ -123,10 +123,33 @@ def _api(metodo, campos, foto=None):
     urllib.request.urlopen(req, timeout=30).read()
 
 
+# Desde el 2026-11-18 (petición de Lucas) a Telegram solo llega lo que obliga a operar: la SEÑAL v2.3 en horario y la
+# gestión de esa operación (TP A, stops, objetivo del runner y cierre de las 21:00). El plan del día, los puntos de
+# control, las pautas, el PREPARADO, el nivel clave, las señales fuera de horario y el cierre del día solo se archivan en
+# la issue de GitHub. Con XAU_TELEGRAM_TODO=1 vuelve a llegar todo.
+TELEGRAM_TODO = os.environ.get('XAU_TELEGRAM_TODO') == '1'
+GESTION = ('CIERRE DIARIO · XAUUSD', 'STOP A · XAUUSD', 'TP A ALCANZADO', 'TP ALCANZADO · XAUUSD', 'STOP B · XAUUSD',
+           'OBJETIVO DEL RUNNER')
+OP_FUERA = False                                   # la operación que se gestiona es de fuera de horario (no validada)
+
+
+def operativo(plano):
+    """¿Obliga a hacer algo en MT5? (abrir la SEÑAL v2.3 o gestionar esa operación)."""
+    if 'FUERA DE HORARIO' in plano:
+        return False
+    if '🚨 SEÑAL · ' in plano or 'Monitor XAU Fractal DayTrader conectado' in plano:
+        return True
+    return any(g in plano for g in GESTION) and not OP_FUERA
+
+
 def tg(texto, foto=None, pie=None):
     """Envia texto HTML; si hay grafico, se envia despues con un pie corto."""
     texto = (f'🧪 <i>{PREFIJO}</i>\n' if PREFIJO else '') + texto
     plano = html.unescape(__import__('re').sub('<[^>]+>', '', texto))
+    if not (TELEGRAM_TODO or operativo(plano)):
+        log('ARCHIVADO (no obliga a operar): ' + plano.replace('\n', ' | ')[:200])
+        copia_github(plano)
+        return
     log('ENVIO: ' + plano.replace('\n', ' | ')[:300])
     aviso_mac(plano.split('\n')[1 if PREFIJO else 0])
     if not cfg():
@@ -539,8 +562,10 @@ def msg_senal(s, bal=CUENTA, fuera=False):
 # ---------------------------------------------------------------- Gestion al segundo
 def gestionar(op, bid, ask, ahora):
     """Sigue la operacion avisada con el precio en vivo. Devuelve op o None al terminar."""
+    global OP_FUERA
     if op is None:
         return None
+    OP_FUERA = bool(op.get('fuera'))
     d = op['dir']; precio = bid if d > 0 else ask
     fA, fB = op.setdefault('lf', lotes_fondeo(op))
     f = lambda lotes, dist: f"  (fondeo: <b>{usd(lotes, dist):+.0f} $</b>)"

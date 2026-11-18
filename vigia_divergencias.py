@@ -473,7 +473,23 @@ def mensaje(sim, a, s, evento, t, precio, tfl='5 min', audit=None, nota=None):
 
 
 # ---------------------------------------------------------------- telegram y estado
+# Desde el 2026-11-18 (petición de Lucas) a Telegram solo llega lo que obliga a operar: la entrada del Momentum GL de 5 min
+# en el US100 (el único extra con backtest positivo los cuatro años) y su cierre de las 16:00 NY. Las divergencias, el
+# FVG, el GL de 15 min, las cancelaciones y el informe de las 22:00 solo se archivan en la issue de GitHub (el informe
+# sigue sirviendo para revisar resultados). VIGIA_TELEGRAM_TODO=1 vuelve a mandarlo todo.
+TELEGRAM_TODO = os.environ.get('VIGIA_TELEGRAM_TODO') == '1'
+
+
+def operativo(plano):
+    return (('MOMENTUM GL · US100 · 5 min' in plano and '🆕' in plano)
+            or plano.startswith('🔚 CIERRE · US100 · Momentum GL · 5 min'))
+
+
 def tg(texto):
+    import re, html
+    if not (TELEGRAM_TODO or operativo(html.unescape(re.sub('<[^>]+>', '', texto)))):
+        copia_github(texto)                           # se archiva, pero no suena en el móvil
+        return
     tok, chat = os.environ.get('TELEGRAM_TOKEN'), os.environ.get('TELEGRAM_CHAT')
     if not tok:
         c = json.load(open(os.path.join(AQUI, 'config_telegram.json')))
