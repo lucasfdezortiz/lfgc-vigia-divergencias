@@ -134,12 +134,11 @@ OP_FUERA = False                                   # la operación que se gestio
 
 
 def operativo(plano):
-    """¿Obliga a hacer algo en MT5? (abrir la SEÑAL v2.3 o gestionar esa operación)."""
+    """¿Es una orden de compra o venta? Desde el 2026-11-18 (petición de Lucas) solo suena la 🚨 SEÑAL v2.3 en horario;
+    la gestión (TP A, stops, runner, cierre de las 21:00) se archiva en GitHub y se lleva desde MT5."""
     if 'FUERA DE HORARIO' in plano:
         return False
-    if '🚨 SEÑAL · ' in plano or 'Monitor XAU Fractal DayTrader conectado' in plano:
-        return True
-    return any(g in plano for g in GESTION) and not OP_FUERA
+    return '🚨 SEÑAL · ' in plano
 
 
 def tg(texto, foto=None, pie=None):

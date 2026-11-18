@@ -481,8 +481,9 @@ TELEGRAM_TODO = os.environ.get('VIGIA_TELEGRAM_TODO') == '1'
 
 
 def operativo(plano):
-    return (('MOMENTUM GL · US100 · 5 min' in plano and '🆕' in plano)
-            or plano.startswith('🔚 CIERRE · US100 · Momentum GL · 5 min'))
+    # solo la orden de compra o venta (🆕 PREPARADA) del Momentum GL de 5 min en el US100; el cierre de las 16:00 NY
+    # y el resto se archivan (petición de Lucas, 2026-11-18)
+    return 'MOMENTUM GL · US100 · 5 min' in plano and '🆕' in plano
 
 
 def tg(texto):
